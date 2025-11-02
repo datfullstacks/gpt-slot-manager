@@ -1,15 +1,9 @@
 // API Base URL
-const API_BASE_URL =
-  window.location.hostname === "localhost"
-    ? "http://localhost:3001/api"
-    : `${window.location.origin}/api`;
 
-const WS_URL =
-  window.location.hostname === "localhost"
-    ? "ws://localhost:3001/ws"
-    : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${
-        window.location.host
-      }/ws`;
+const API_BASE_URL = `${window.location.origin}/api`;
+
+const WS_PROTOCOL = window.location.protocol === "https:" ? "wss:" : "ws:";
+const WS_URL = `${WS_PROTOCOL}//${window.location.host}/ws`;
 
 // State Management
 let currentToken = localStorage.getItem("token");
