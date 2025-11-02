@@ -1,0 +1,32 @@
+{
+  "name": "account-manager-app",
+  "version": "1.0.0",
+  "description": "A simple application for managing accounts with curl commands.",
+  "type": "module",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "axios": "^0.21.1",
+    "bcryptjs": "^3.0.2",
+    "dotenv": "^10.0.0",
+    "express": "^4.17.1",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.19.2",
+    "p-limit": "^7.2.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.7"
+  },
+  "keywords": [
+    "account",
+    "management",
+    "curl",
+    "api"
+  ],
+  "author": "Your Name",
+  "license": "ISC"
+}

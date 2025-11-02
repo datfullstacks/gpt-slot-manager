@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GPT Slot Manager - Admin Account Management</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <!-- Login/Register Section -->
+      <div id="authSection" class="auth-section">
+        <div class="auth-container">
+          <div class="auth-tabs">
+            <button class="tab-btn active" onclick="showLogin()">
+              Đăng Nhập
+            </button>
+            <button class="tab-btn" onclick="showRegister()">Đăng Ký</button>
+          </div>
+
+          <!-- Login Form -->
+          <div id="loginForm" class="auth-form">
+            <h2>Đăng Nhập</h2>
+            <form onsubmit="handleLogin(event)">
+              <div class="form-group">
+                <label>Username hoặc Email</label>
+                <input
+                  type="text"
+                  id="loginUsername"
+                  required
+                  placeholder="Nhập username hoặc email"
+                />
+              </div>
+              <div class="form-group">
+                <label>Password</label>
+                <input
+                  type="password"
+                  id="loginPassword"
+                  required
+                  placeholder="Nhập mật khẩu"
+                />
+              </div>
+              <button type="submit" class="btn btn-primary">Đăng Nhập</button>
+            </form>
+          </div>
+
+          <!-- Register Form -->
+          <div id="registerForm" class="auth-form" style="display: none">
+            <h2>Đăng Ký Tài Khoản</h2>
+            <form onsubmit="handleRegister(event)">
+              <div class="form-group">
+                <label>Username</label>
+                <input
+                  type="text"
+                  id="registerUsername"
+                  required
+                  placeholder="Tối thiểu 3 ký tự"
+                />
+              </div>
+              <div class="form-group">
+                <label>Email</label>
+                <input
+                  type="email"
+                  id="registerEmail"
+                  required
+                  placeholder="email@example.com"
+                />
+              </div>
+              <div class="form-group">
+                <label>Password</label>
+                <input
+                  type="password"
+                  id="registerPassword"
+                  required
+                  placeholder="Tối thiểu 6 ký tự"
+                />
+              </div>
+              <div class="form-group">
+                <label>Xác nhận Password</label>
+                <input
+                  type="password"
+                  id="registerPasswordConfirm"
+                  required
+                  placeholder="Nhập lại mật khẩu"
+                />
+              </div>
+              <button type="submit" class="btn btn-primary">Đăng Ký</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dashboard Section -->
+      <div
+        id="dashboardSection"
+        class="dashboard-section"
+        style="display: none"
+      >
+        <!-- Header -->
+        <div class="dashboard-header">
+          <div class="user-info">
+            <h2>👋 Xin chào, <span id="username"></span></h2>
+            <p>Email: <span id="userEmail"></span></p>
+          </div>
+          <button onclick="handleLogout()" class="btn btn-danger">
+            Đăng Xuất
+          </button>
+        </div>
+
+        <!-- Code Verification Section -->
+        <div id="codeVerificationSection" class="card" style="display: none">
+          <h3>🔐 Xác Thực Mã Code</h3>
+          <p>
+            Bạn cần nhập mã code do admin cấp để sử dụng tính năng quản lý admin
+            accounts.
+          </p>
+          <form onsubmit="handleVerifyCode(event)" style="margin-top: 20px">
+            <div class="form-group">
+              <label>Nhập mã code</label>
+              <input
+                type="text"
+                id="accessCodeInput"
+                required
+                placeholder="Nhập mã code từ admin"
+                style="font-size: 16px; letter-spacing: 2px"
+              />
+              <small class="help-text"
+                >Liên hệ admin để lấy mã code nếu bạn chưa có</small
+              >
+            </div>
+            <button type="submit" class="btn btn-primary">Xác Thực</button>
+          </form>
+        </div>
+
+        <!-- Admin Accounts Section -->
+        <div id="accountsSection" class="card" style="display: none">
+          <div class="card-header">
+            <h3>📧 Quản Lý Admin Accounts</h3>
+            <div style="display: flex; gap: 10px; align-items: center">
+              <button onclick="showAddAccountModal()" class="btn btn-success">
+                ➕ Thêm Account
+              </button>
+              <!-- <button onclick="sendInvitesToAll()" class="btn btn-primary">📧 Gửi Invite Tất Cả</button> -->
+              <!-- <button onclick="autoCleanupAll()" class="btn btn-danger" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);">🧹 Xóa Members Không Hợp Lệ</button> -->
+              <div class="countdown-display">
+                <span style="font-size: 14px; color: #666">Next check: </span>
+                <span
+                  id="countdownTimer"
+                  style="font-size: 18px; font-weight: bold; color: #2563eb"
+                  >30s</span
+                >
+              </div>
+            </div>
+          </div>
+
+          <!-- Real-time Stats -->
+          <div class="stats-row">
+            <div class="stat-box">
+              <div class="stat-label">📊 Total Accounts</div>
+              <div class="stat-value" id="totalAccountsCount">0</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">👥 Total Members</div>
+              <div class="stat-value" id="totalMembersCount">0</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">✅ Success</div>
+              <div class="stat-value" id="successAccountsCount">0</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">❌ Failed</div>
+              <div class="stat-value" id="failedAccountsCount">0</div>
+            </div>
+          </div>
+
+          <!-- Accounts Table -->
+          <div class="table-container">
+            <table class="accounts-table">
+              <thead>
+                <tr>
+                  <th style="width: 50px">#</th>
+                  <th style="width: 250px">Admin Email</th>
+                  <th style="width: 100px">Members</th>
+                  <th style="width: 250px">Member Emails</th>
+                  <th style="width: 200px">Member Cố Định</th>
+                  <th style="width: 100px">Status</th>
+                  <th style="width: 180px">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="accountsTableBody">
+                <tr>
+                  <td colspan="7" class="loading-cell">Đang tải dữ liệu...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Account Modal -->
+    <div id="addAccountModal" class="modal" style="display: none">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>➕ Thêm Admin Account</h3>
+          <button onclick="closeAddAccountModal()" class="btn-close">
+            &times;
+          </button>
+        </div>
+        <form onsubmit="handleAddAccount(event)">
+          <div class="form-group">
+            <label>Email Admin</label>
+            <input
+              type="email"
+              id="newAccountEmail"
+              required
+              placeholder="admin@example.com"
+            />
+            <small class="help-text">Email của ChatGPT admin account</small>
+          </div>
+          <div class="form-group">
+            <label>Access Token</label>
+            <textarea
+              id="newAccessToken"
+              required
+              placeholder="eyJhbGc..."
+              rows="4"
+            ></textarea>
+            <small class="help-text"
+              >Bearer token từ ChatGPT (copy toàn bộ token, không cần "Bearer "
+              prefix)</small
+            >
+          </div>
+          <div class="form-group">
+            <label>Account ID (Tùy chọn)</label>
+            <input
+              type="text"
+              id="newAccountId"
+              placeholder="17dc4860-eff7-434e-bada-9a09fbdbac88 (UUID format)"
+            />
+            <small class="help-text"
+              >Để trống - hệ thống sẽ tự động lấy. Nếu muốn nhập: lấy từ URL
+              /accounts/{UUID}/users</small
+            >
+          </div>
+          <div class="form-group">
+            <label>Member Cố Định (Email được phép)</label>
+            <textarea
+              id="newAllowedMembers"
+              placeholder="member1@gmail.com&#10;member2@gmail.com&#10;member3@gmail.com"
+              rows="4"
+            ></textarea>
+            <small class="help-text"
+              >Mỗi email một dòng. Email admin sẽ tự động được bỏ qua (không cần
+              nhập)</small
+            >
+          </div>
+          <div class="modal-footer">
+            <button
+              type="button"
+              onclick="closeAddAccountModal()"
+              class="btn btn-secondary"
+            >
+              Hủy
+            </button>
+            <button type="submit" class="btn btn-primary">Thêm Account</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Edit Allowed Members Modal -->
+    <div id="editAllowedMembersModal" class="modal" style="display: none">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>✏️ Chỉnh Sửa Member Cố Định</h3>
+          <button onclick="closeEditAllowedMembersModal()" class="btn-close">
+            &times;
+          </button>
+        </div>
+        <form onsubmit="handleUpdateAllowedMembers(event)">
+          <input type="hidden" id="editAccountId" />
+          <div class="form-group">
+            <label>Admin Email</label>
+            <input
+              type="text"
+              id="editAdminEmail"
+              readonly
+              style="background: #1a1a1a; color: #9ca3af"
+            />
+          </div>
+          <div class="form-group">
+            <label>Member Cố Định (Email được phép)</label>
+            <textarea
+              id="editAllowedMembers"
+              placeholder="member1@gmail.com&#10;member2@gmail.com&#10;member3@gmail.com"
+              rows="6"
+            ></textarea>
+            <small class="help-text"
+              >Mỗi email một dòng. Email admin sẽ tự động được bỏ qua (không cần
+              nhập)</small
+            >
+          </div>
+          <div class="modal-footer">
+            <button
+              type="button"
+              onclick="closeEditAllowedMembersModal()"
+              class="btn btn-secondary"
+            >
+              Hủy
+            </button>
+            <button type="submit" class="btn btn-primary">Cập Nhật</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Send Invite Modal -->
+    <div id="sendInviteModal" class="modal" style="display: none">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>📧 Gửi Lời Mời</h3>
+          <button onclick="closeSendInviteModal()" class="btn-close">
+            &times;
+          </button>
+        </div>
+        <form onsubmit="handleSendInvite(event)">
+          <input type="hidden" id="inviteAccountId" />
+          <div class="form-group">
+            <label>Admin Email</label>
+            <input
+              type="text"
+              id="inviteAdminEmail"
+              readonly
+              style="background: #1a1a1a; color: #9ca3af"
+            />
+          </div>
+          <div class="form-group">
+            <label>Email Members (Tối đa 7)</label>
+            <textarea
+              id="inviteEmails"
+              placeholder="member1@gmail.com&#10;member2@gmail.com&#10;member3@gmail.com"
+              rows="6"
+            ></textarea>
+            <small class="help-text"
+              >Mỗi email một dòng. Email sẽ tự động thêm vào Member Cố Định nếu
+              chưa có. Không được trùng với email đã có ở account khác.</small
+            >
+          </div>
+          <div class="form-group">
+            <label
+              >Số slot còn lại:
+              <span
+                id="remainingSlots"
+                style="color: #10b981; font-weight: bold"
+                >7</span
+              >/7</label
+            >
+          </div>
+          <div class="modal-footer">
+            <button
+              type="button"
+              onclick="closeSendInviteModal()"
+              class="btn btn-secondary"
+            >
+              Hủy
+            </button>
+            <button type="submit" class="btn btn-success">📧 Gửi Invite</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
