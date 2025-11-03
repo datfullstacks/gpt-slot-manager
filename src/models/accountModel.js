@@ -6,6 +6,12 @@ const accountSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
+    name: {
+        type: String,
+        required: false,
+        trim: true,
+        default: 'Unnamed Account'
+    },
     email: {
         type: String,
         required: true,
@@ -29,10 +35,26 @@ const accountSchema = new mongoose.Schema({
         default: [],
         trim: true
     },
+    maxMembers: {
+        type: Number,
+        default: 7, // Default ChatGPT Business limit
+        min: 1,
+        max: 100
+    },
     createdAt: {
         type: Date,
         default: Date.now
+    },
+    updatedAt: {
+        type: Date,
+        default: Date.now
     }
+});
+
+// Auto-update updatedAt on save
+accountSchema.pre('save', function(next) {
+    this.updatedAt = Date.now();
+    next();
 });
 
 // Compound index: userId + email should be unique

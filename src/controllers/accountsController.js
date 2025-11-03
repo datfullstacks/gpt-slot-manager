@@ -12,11 +12,13 @@ class AccountsController {
     try {
       console.log("Creating account with data:", req.body);
       const {
+        name,
         email,
         accountId,
         accessToken,
         additionalHeaders,
         allowedMembers,
+        maxMembers,
       } = req.body;
       const userId = req.userId; // From auth middleware
 
@@ -30,11 +32,13 @@ class AccountsController {
 
       const account = new Account({
         userId,
+        name: name || 'Unnamed Account',
         email,
         accountId: finalAccountId,
         accessToken,
         additionalHeaders: additionalHeaders || {},
         allowedMembers: validAllowedMembers,
+        maxMembers: maxMembers || 7,
       });
 
       await account.save();
@@ -137,6 +141,7 @@ class AccountsController {
       );
 
       account.allowedMembers = validAllowedMembers;
+      account.updatedAt = Date.now();
       await account.save();
 
       res.status(200).json({
@@ -157,12 +162,28 @@ class AccountsController {
     try {
       const userId = req.userId;
       const accountId = req.params.id;
-      const { emails } = req.body; // Array of emails to invite
+      const { emails, autoCleanup = true } = req.body; // Array of emails to invite + auto cleanup flag
 
       // Find account
       const account = await Account.findOne({ _id: accountId, userId });
       if (!account) {
         return res.status(404).json({ message: "Account not found" });
+      }
+
+      // AUTO CLEANUP: Clean unauthorized pending invites BEFORE sending new ones
+      let cleanupResult = null;
+      if (autoCleanup) {
+        try {
+          console.log(`🧹 Auto-cleaning pending invites before sending new invites...`);
+          cleanupResult = await this.inviteService.cleanupPendingInvites(
+            account.accountId,
+            account.accessToken,
+            account.allowedMembers
+          );
+          console.log(`✅ Cleanup completed: ${cleanupResult.deleted?.length || 0} deleted`);
+        } catch (error) {
+          console.warn(`⚠️  Auto-cleanup failed (continuing anyway):`, error.message);
+        }
       }
 
       // Get current allowed members
@@ -251,6 +272,11 @@ class AccountsController {
         invited_count: result.invited_count,
         total_allowed_members: currentAllowedMembers.length,
         remaining_slots: 7 - currentAllowedMembers.length,
+        cleanup: cleanupResult ? {
+          deleted: cleanupResult.deleted?.length || 0,
+          failed: cleanupResult.failed?.length || 0,
+          emails_deleted: cleanupResult.deleted || []
+        } : null,
         data: result.data,
       });
     } catch (error) {
@@ -264,6 +290,7 @@ class AccountsController {
   async sendInvitesToAll(req, res) {
     try {
       const userId = req.userId;
+      const { autoCleanup = true } = req.body; // Auto cleanup flag
 
       // Get all accounts
       const accounts = await Account.find({ userId });
@@ -272,8 +299,30 @@ class AccountsController {
         return res.status(404).json({ message: "No accounts found" });
       }
 
+      // AUTO CLEANUP ALL if requested
+      let totalCleaned = 0;
+      if (autoCleanup) {
+        console.log(`🧹 Auto-cleaning pending invites for all accounts before sending...`);
+        for (const account of accounts) {
+          try {
+            const cleanupResult = await this.inviteService.cleanupPendingInvites(
+              account.accountId,
+              account.accessToken,
+              account.allowedMembers
+            );
+            totalCleaned += cleanupResult.deleted?.length || 0;
+            console.log(`  ✅ ${account.email}: ${cleanupResult.deleted?.length || 0} cleaned`);
+            // Small delay between cleanups
+            await new Promise(resolve => setTimeout(resolve, 500));
+          } catch (error) {
+            console.warn(`  ⚠️  ${account.email}: cleanup failed -`, error.message);
+          }
+        }
+        console.log(`✅ Total cleaned: ${totalCleaned} pending invites`);
+      }
+
       // Send invites to all accounts
-      console.log(`Sending invites for ${accounts.length} accounts...`);
+      console.log(`📧 Sending invites for ${accounts.length} accounts...`);
       const results = await this.inviteService.sendInvitesToMultipleAccounts(
         accounts,
         5
@@ -285,6 +334,7 @@ class AccountsController {
       res.status(200).json({
         message: `Invites sent to ${successCount}/${accounts.length} accounts`,
         total_invited: totalInvited,
+        total_cleaned: autoCleanup ? totalCleaned : null,
         results: results,
       });
     } catch (error) {
@@ -587,6 +637,143 @@ class AccountsController {
       res
         .status(500)
         .json({ message: "Error in auto cleanup all", error: error.message });
+    }
+  }
+
+  async getPendingInvites(req, res) {
+    try {
+      const { id } = req.params; // Account MongoDB _id
+      const userId = req.userId;
+
+      const account = await Account.findOne({ _id: id, userId });
+      
+      if (!account) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+
+      console.log(`📋 Getting pending invites for account: ${account.email}`);
+
+      const result = await this.inviteService.getPendingInvites(
+        account.accountId,
+        account.accessToken
+      );
+
+      res.status(200).json({
+        success: true,
+        account: {
+          email: account.email,
+          accountId: account.accountId,
+          name: account.name
+        },
+        invites: result.invites,
+        total: result.total
+      });
+    } catch (error) {
+      console.error("Error getting pending invites:", error);
+      res.status(500).json({
+        message: "Error getting pending invites",
+        error: error.message
+      });
+    }
+  }
+
+  async cleanupPendingInvites(req, res) {
+    try {
+      const { id } = req.params; // Account MongoDB _id
+      const userId = req.userId;
+
+      const account = await Account.findOne({ _id: id, userId });
+      
+      if (!account) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+
+      console.log(`🧹 Cleaning up pending invites for account: ${account.email}`);
+
+      const result = await this.inviteService.cleanupPendingInvites(
+        account.accountId,
+        account.accessToken,
+        account.allowedMembers
+      );
+
+      res.status(200).json({
+        success: true,
+        account: {
+          email: account.email,
+          accountId: account.accountId,
+          name: account.name
+        },
+        ...result
+      });
+    } catch (error) {
+      console.error("Error cleaning up pending invites:", error);
+      res.status(500).json({
+        message: "Error cleaning up pending invites",
+        error: error.message
+      });
+    }
+  }
+
+  async cleanupAllPendingInvites(req, res) {
+    try {
+      const userId = req.userId;
+      const accounts = await Account.find({ userId });
+
+      if (accounts.length === 0) {
+        return res.status(404).json({ message: "No accounts found for this user" });
+      }
+
+      console.log(`🧹 Starting cleanup of pending invites for ${accounts.length} accounts...`);
+
+      const allResults = [];
+
+      for (const account of accounts) {
+        try {
+          console.log(`\n📋 Processing account: ${account.email}`);
+
+          const result = await this.inviteService.cleanupPendingInvites(
+            account.accountId,
+            account.accessToken,
+            account.allowedMembers
+          );
+
+          allResults.push({
+            account: account.email,
+            name: account.name,
+            accountId: account.accountId,
+            ...result
+          });
+
+          // Add 1 second delay between accounts
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          console.error(`❌ Error processing ${account.email}:`, error.message);
+          allResults.push({
+            account: account.email,
+            name: account.name,
+            accountId: account.accountId,
+            success: false,
+            error: error.message
+          });
+        }
+      }
+
+      const totalDeleted = allResults.reduce((sum, r) => sum + (r.deleted?.length || 0), 0);
+      const totalFailed = allResults.reduce((sum, r) => sum + (r.failed?.length || 0), 0);
+
+      res.status(200).json({
+        message: `Cleanup completed for ${accounts.length} accounts`,
+        total_accounts: accounts.length,
+        total_deleted: totalDeleted,
+        total_failed: totalFailed,
+        results: allResults
+      });
+    } catch (error) {
+      console.error("Error in cleanup all pending invites:", error);
+      res.status(500).json({
+        message: "Error in cleanup all pending invites",
+        error: error.message
+      });
     }
   }
 }

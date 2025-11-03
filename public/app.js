@@ -250,7 +250,7 @@ function copyApiKey() {
 async function loadAccounts() {
   const tbody = document.getElementById("accountsTableBody");
   tbody.innerHTML =
-    '<tr><td colspan="7" class="loading-cell">Đang tải danh sách accounts...</td></tr>';
+    '<tr><td colspan="9" class="loading-cell">Đang tải danh sách accounts...</td></tr>';
 
   try {
     const response = await fetch(`${API_BASE_URL}/accounts`, {
@@ -265,7 +265,7 @@ async function loadAccounts() {
 
     if (accounts.length === 0) {
       tbody.innerHTML =
-        '<tr><td colspan="7" class="loading-cell">Chưa có account nào. Hãy thêm account đầu tiên!</td></tr>';
+        '<tr><td colspan="9" class="loading-cell">Chưa có account nào. Hãy thêm account đầu tiên!</td></tr>';
       document.getElementById("totalAccountsCount").textContent = "0";
       document.getElementById("totalMembersCount").textContent = "0";
       document.getElementById("successAccountsCount").textContent = "0";
@@ -285,13 +285,29 @@ async function loadAccounts() {
 
         const mongoId = account._id || "";
         const buttonId = `edit-btn-load-${index}`;
+        const accountName = account.name || 'Unnamed Account';
+        const accountEmail = account.email;
+        const maxMembers = account.maxMembers || 7;
+
+        // Format dates
+        const createdDate = account.createdAt ? new Date(account.createdAt).toLocaleDateString('vi-VN', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric'
+        }) : 'N/A';
+        const updatedDate = account.updatedAt ? new Date(account.updatedAt).toLocaleDateString('vi-VN', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric'
+        }) : 'N/A';
 
         return `
                 <tr>
                     <td>${index + 1}</td>
-                    <td style="font-weight: 500; color: #60a5fa;">${
-                      account.email
-                    }</td>
+                    <td>
+                        <div style="font-weight: 600; color: #60a5fa; font-size: 14px;">${accountName}</div>
+                        <div style="font-size: 11px; color: #9ca3af; margin-top: 2px;">${accountEmail}</div>
+                    </td>
                     <td style="text-align: center;">-</td>
                     <td><span style="color: #9ca3af;">Đang chờ cập nhật...</span></td>
                     <td>
@@ -299,7 +315,7 @@ async function loadAccounts() {
                         <button id="${buttonId}"
                                 class="btn-table edit-allowed-btn" 
                                 data-account-id="${mongoId}"
-                                data-admin-email="${account.email}"
+                                data-admin-email="${accountEmail}"
                                 data-allowed-members='${JSON.stringify(
                                   account.allowedMembers || []
                                 )}'
@@ -307,11 +323,20 @@ async function loadAccounts() {
                             ✏️ Edit
                         </button>
                     </td>
+                    <td style="text-align: center;">
+                        <button onclick="viewPendingInvites('${mongoId}')" class="btn-table" 
+                                style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 4px 8px; font-size: 12px;"
+                                title="Xem pending invites">
+                            👁️ View
+                        </button>
+                    </td>
+                    <td style="text-align: center; font-size: 11px;">
+                        <div style="color: #10b981;">📅 ${createdDate}</div>
+                        <div style="color: #f59e0b; margin-top: 2px;">🔄 ${updatedDate}</div>
+                    </td>
                     <td><span class="status-badge status-pending">⏳ Pending</span></td>
                     <td>
-                        <button onclick="showSendInviteModal('${mongoId}', '${
-          account.email
-        }', ${(account.allowedMembers || []).length})" class="btn-table" 
+                        <button onclick="showSendInviteModal('${mongoId}', '${accountEmail}', 0, ${maxMembers})" class="btn-table" 
                                 style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; margin-right: 5px;"
                                 title="Gửi invite đến member cố định">
                             📧 Invite
@@ -368,19 +393,23 @@ function showAddAccountModal() {
 function closeAddAccountModal() {
   document.getElementById("addAccountModal").style.display = "none";
   // Reset form
+  document.getElementById("newAccountName").value = "";
   document.getElementById("newAccountEmail").value = "";
   document.getElementById("newAccessToken").value = "";
   document.getElementById("newAccountId").value = "";
   document.getElementById("newAllowedMembers").value = "";
+  document.getElementById("newMaxMembers").value = "7";
 }
 
 // Handle Add Account
 async function handleAddAccount(event) {
   event.preventDefault();
 
+  const name = document.getElementById("newAccountName").value.trim() || 'Unnamed Account';
   const email = document.getElementById("newAccountEmail").value;
   const accountId = document.getElementById("newAccountId").value.trim(); // Optional
   const accessToken = document.getElementById("newAccessToken").value.trim();
+  const maxMembers = parseInt(document.getElementById("newMaxMembers").value) || 7;
   const allowedMembersText = document
     .getElementById("newAllowedMembers")
     .value.trim();
@@ -399,9 +428,11 @@ async function handleAddAccount(event) {
 
   try {
     const payload = {
+      name,
       email,
       accessToken,
       allowedMembers,
+      maxMembers,
     };
 
     // Only include accountId if provided
@@ -501,6 +532,12 @@ async function deleteMemberFromAccount(
       if (data.removed_from_allowed) {
         showToast(`✅ Đã xóa khỏi "Member Cố Định"`, "info");
       }
+
+      // Auto cleanup pending invites immediately after deleting member
+      console.log("🧹 Auto-cleanup pending invites after member deletion");
+      cleanupPendingInvitesForAccount(accountId).catch(err => {
+        console.warn("Auto-cleanup failed:", err);
+      });
 
       loadAccounts(); // Reload to refresh member list
     } else {
@@ -706,6 +743,7 @@ function handleWebSocketMessage(message) {
 
 function updateMembersDisplay(data) {
   console.log("Updating members display:", data);
+  console.log("Sample account data:", data.accounts[0]); // Debug: xem cấu trúc data
 
   // Update statistics
   document.getElementById("totalAccountsCount").textContent =
@@ -721,13 +759,36 @@ function updateMembersDisplay(data) {
   // Reset countdown
   countdownSeconds = 30;
 
+  // Check if any unauthorized members or pending invites were deleted
+  let totalDeleted = 0;
+  let totalPendingCleaned = 0;
+  data.accounts.forEach(account => {
+    if (account.unauthorized_deleted) {
+      totalDeleted += account.unauthorized_deleted;
+    }
+    if (account.pending_invites_cleaned) {
+      totalPendingCleaned += account.pending_invites_cleaned;
+    }
+  });
+
   // Update table
   updateAccountsTable(data.accounts);
 
-  // Show notification
-  console.log(
-    `📊 Đã cập nhật: ${successCount}/${data.total_accounts} accounts | ${data.total_members} members`
-  );
+  // Show notification with cleanup info
+  let notificationMsg = `📊 Cập nhật: ${successCount}/${data.total_accounts} accounts | ${data.total_members} members`;
+  if (totalDeleted > 0) {
+    notificationMsg += ` | 🧹 Đã xóa ${totalDeleted} members không được phép`;
+  }
+  if (totalPendingCleaned > 0) {
+    notificationMsg += ` | 🧹 Đã xóa ${totalPendingCleaned} pending invites`;
+  }
+  
+  console.log(notificationMsg);
+  
+  // Show toast if cleanup happened
+  if (totalDeleted > 0 || totalPendingCleaned > 0) {
+    showToast(`🧹 Auto-cleanup: ${totalDeleted} members + ${totalPendingCleaned} pending invites đã xóa`, 'info');
+  }
 }
 
 function updateAccountsTable(accounts) {
@@ -735,7 +796,7 @@ function updateAccountsTable(accounts) {
 
   if (accounts.length === 0) {
     tbody.innerHTML =
-      '<tr><td colspan="7" class="loading-cell">Chưa có dữ liệu</td></tr>';
+      '<tr><td colspan="9" class="loading-cell">Chưa có dữ liệu</td></tr>';
     return;
   }
 
@@ -744,6 +805,8 @@ function updateAccountsTable(accounts) {
       // Members list provided by backend includes admin as first member (id='admin')
       const membersList =
         account.members && account.members.length > 0 ? account.members : [];
+      // Count members excluding the admin entry (we mark admin with id === 'admin')
+      const currentMemberCount = (membersList || []).filter((m) => m.id !== 'admin').length;
 
       const memberEmails =
         membersList.length > 0
@@ -792,25 +855,49 @@ function updateAccountsTable(accounts) {
 
       // Use _id for database operations
       const mongoId = account._id || "";
-      const displayAccountId = account.accountId || account._id || "";
+      const accountName = account.name || 'Unnamed Account';
+      const accountEmail = account.email;
+
+      // Format dates
+      const createdDate = account.createdAt ? new Date(account.createdAt).toLocaleDateString('vi-VN', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      }) : 'N/A';
+      const updatedDate = account.updatedAt ? new Date(account.updatedAt).toLocaleDateString('vi-VN', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      }) : 'N/A';
 
       // Create unique button ID for this row
       const buttonId = `edit-btn-${index}`;
+      const maxMembers = account.maxMembers || 7;
+      
+      // Calculate total including admin
+      const totalMembers = currentMemberCount + 1; // +1 for admin
+      const totalLimit = maxMembers + 1; // +1 for admin (8 total)
+      const remaining = maxMembers - currentMemberCount;
 
       return `
             <tr>
                 <td>${index + 1}</td>
-                <td style="font-weight: 500; color: #60a5fa;">${
-                  account.email
-                }</td>
-                <td style="text-align: center; font-weight: bold; color: ${
-                  account.success ? "#10b981" : "#ef4444"
-                };">
-                    ${
-                      account.members && account.members.length
-                        ? account.members.length
-                        : 0
-                    }
+                <td>
+                    <div style="font-weight: 600; color: #60a5fa; font-size: 14px;">${accountName}</div>
+                    <div style="font-size: 11px; color: #9ca3af; margin-top: 2px;">${accountEmail}</div>
+                </td>
+                <td style="text-align: center;">
+                    <div style="font-weight: bold; font-size: 16px; color: ${
+                      account.success ? "#10b981" : "#ef4444"
+                    };">
+                        ${currentMemberCount}/${maxMembers}
+                    </div>
+                    <div style="font-size: 10px; color: #9ca3af; margin-top: 2px;">
+                        Tổng: ${totalMembers}/${totalLimit}
+                    </div>
+                    <div style="font-size: 10px; color: ${remaining > 0 ? '#10b981' : '#ef4444'}; margin-top: 2px;">
+                        Còn: ${remaining} slot${remaining !== 1 ? 's' : ''}
+                    </div>
                 </td>
                 <td>
                     <div class="member-list">${memberEmails}</div>
@@ -820,13 +907,29 @@ function updateAccountsTable(accounts) {
                     <button id="${buttonId}" 
                             class="btn-table edit-allowed-btn" 
                             data-account-id="${mongoId}"
-                            data-admin-email="${account.email}"
+                            data-admin-email="${accountEmail}"
                             data-allowed-members='${JSON.stringify(
                               account.allowedMembers || []
                             )}'
                             style="margin-top: 8px; background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white;">
                         ✏️ Edit
                     </button>
+                </td>
+                <td style="text-align: center;">
+                    <button onclick="viewPendingInvites('${mongoId}')" class="btn-table" 
+                            style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 4px 8px; font-size: 12px;"
+                            title="Xem pending invites">
+                        👁️ View
+                    </button>
+                    <button onclick="cleanupPendingInvites('${mongoId}')" class="btn-table" 
+                            style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; padding: 4px 8px; font-size: 12px; margin-top: 4px;"
+                            title="Cleanup pending invites">
+                        🧹 Cleanup
+                    </button>
+                </td>
+                <td style="text-align: center; font-size: 11px;">
+                    <div style="color: #10b981;">📅 ${createdDate}</div>
+                    <div style="color: #f59e0b; margin-top: 2px;">🔄 ${updatedDate}</div>
                 </td>
                 <td>
                     <span class="status-badge ${statusClass}">${statusText}</span>
@@ -839,7 +942,7 @@ function updateAccountsTable(accounts) {
                     }
                 </td>
                 <td>
-                    <button onclick="sendInvite('${mongoId}')" class="btn-table" 
+                    <button onclick="showSendInviteModal('${mongoId}', '${accountEmail}', ${currentMemberCount}, ${maxMembers})" class="btn-table" 
                             style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; margin-right: 5px;"
                             title="Gửi invite đến member cố định">
                         📧 Invite
@@ -979,6 +1082,13 @@ async function handleUpdateAllowedMembers(event) {
     if (response.ok) {
       showToast("Cập nhật member cố định thành công!", "success");
       closeEditAllowedMembersModal();
+      
+      // Auto cleanup pending invites immediately after updating allowed members
+      console.log("🧹 Auto-cleanup pending invites for account:", accountId);
+      cleanupPendingInvitesForAccount(accountId).catch(err => {
+        console.warn("Auto-cleanup failed:", err);
+      });
+      
       loadAccounts();
     } else {
       showToast(data.message || "Cập nhật thất bại!", "error");
@@ -992,24 +1102,97 @@ async function handleUpdateAllowedMembers(event) {
 // Send Invites Functions
 async function sendInvite(accountId, adminEmail, currentAllowedMembers) {
   // Show modal to input emails
-  showSendInviteModal(accountId, adminEmail, currentAllowedMembers);
+  showSendInviteModal(accountId, adminEmail, currentAllowedMembers, 7);
 }
 
-function showSendInviteModal(accountId, adminEmail, currentAllowedMembers) {
+function showSendInviteModal(accountId, adminEmail, currentMemberCount, maxMembers = 7) {
   document.getElementById("inviteAccountId").value = accountId;
   document.getElementById("inviteAdminEmail").value = adminEmail;
   document.getElementById("inviteEmails").value = "";
 
-  const remaining = 7 - (currentAllowedMembers || []).length;
-  document.getElementById("remainingSlots").textContent = remaining;
-  document.getElementById("remainingSlots").style.color =
-    remaining > 0 ? "#10b981" : "#ef4444";
+  // Store current member count and maxMembers for validation
+  document.getElementById("inviteAccountId").dataset.currentMembers = currentMemberCount || 0;
+  document.getElementById("inviteAccountId").dataset.maxMembers = maxMembers || 7;
+
+  // Calculate slots: maxMembers is for USER members only (not including admin)
+  // ChatGPT limit: 8 total (1 admin + 7 user members)
+  const remaining = Math.max(0, maxMembers - currentMemberCount);
+  const totalMembers = currentMemberCount + 1; // +1 for admin
+  const totalLimit = maxMembers + 1; // +1 for admin (8 total)
+  
+  const remainingSlotsEl = document.getElementById("remainingSlots");
+  const remainingSlotsParent = remainingSlotsEl.parentElement;
+  
+  remainingSlotsParent.innerHTML = `
+    <label>
+      Slots còn lại: <span id="remainingSlots" style="color: ${remaining > 0 ? '#10b981' : '#ef4444'}; font-weight: bold;">${remaining}/${maxMembers}</span>
+      <span style="color: #9ca3af;">(Tổng: ${totalMembers}/${totalLimit}, User Members: ${currentMemberCount}/${maxMembers})</span>
+    </label>
+  `;
+
+  // Add real-time validation on input
+  const inviteEmailsInput = document.getElementById("inviteEmails");
+  inviteEmailsInput.oninput = function() {
+    const emailsText = this.value.trim();
+    const newEmails = emailsText
+      .split("\n")
+      .map((e) => e.trim().toLowerCase())
+      .filter((e) => e && e.includes("@"));
+    
+    const currentCount = parseInt(document.getElementById("inviteAccountId").dataset.currentMembers) || 0;
+    const maxMembersLimit = parseInt(document.getElementById("inviteAccountId").dataset.maxMembers) || 7;
+    
+    // Check for duplicates in input
+    const uniqueEmails = [...new Set(newEmails)];
+    const hasDuplicates = uniqueEmails.length !== newEmails.length;
+    
+    const afterAdd = currentCount + uniqueEmails.length;
+    const remainingAfter = Math.max(0, maxMembersLimit - afterAdd);
+    
+    const totalAfterAdd = afterAdd + 1; // +1 for admin
+    const totalLimit = maxMembersLimit + 1; // +1 for admin (8 total)
+    
+    const remainingSlotsEl = document.getElementById("remainingSlots");
+    const remainingSlotsParent = remainingSlotsEl.parentElement;
+    
+    if (hasDuplicates) {
+      const duplicates = newEmails.filter((email, index) => newEmails.indexOf(email) !== index);
+      const uniqueDuplicates = [...new Set(duplicates)];
+      remainingSlotsParent.innerHTML = `
+        <label style="color: #ef4444;">
+          ⚠️ EMAIL BỊ TRÙNG LẶP! 
+          <span style="font-weight: bold;">${uniqueDuplicates.join(", ")}</span>
+          <br><small>Vui lòng xóa email trùng. Tổng: ${newEmails.length} emails (${uniqueEmails.length} unique)</small>
+        </label>
+      `;
+    } else if (afterAdd > maxMembersLimit) {
+      remainingSlotsParent.innerHTML = `
+        <label style="color: #ef4444;">
+          ⚠️ VƯỢT QUÁ GIỚI HẠN! 
+          <span style="font-weight: bold;">Đang nhập: ${uniqueEmails.length}</span>, 
+          User Members hiện có: ${currentCount}, 
+          Tổng User Members sẽ là: <span style="font-weight: bold;">${afterAdd}/${maxMembersLimit}</span>
+          (Tổng tất cả: ${totalAfterAdd}/${totalLimit})
+        </label>
+      `;
+    } else {
+      remainingSlotsParent.innerHTML = `
+        <label>
+          Slots còn lại sau khi thêm: <span id="remainingSlots" style="color: ${remainingAfter > 0 ? '#10b981' : '#f59e0b'}; font-weight: bold;">${remainingAfter}/${maxMembersLimit}</span>
+          <span style="color: #9ca3af;">(Đang nhập: ${uniqueEmails.length} unique, Tổng sẽ là: ${totalAfterAdd}/${totalLimit})</span>
+        </label>
+      `;
+    }
+  };
 
   document.getElementById("sendInviteModal").style.display = "flex";
 }
 
 function closeSendInviteModal() {
   document.getElementById("sendInviteModal").style.display = "none";
+  // Remove event listener
+  const inviteEmailsInput = document.getElementById("inviteEmails");
+  inviteEmailsInput.oninput = null;
 }
 
 async function handleSendInvite(event) {
@@ -1017,6 +1200,8 @@ async function handleSendInvite(event) {
 
   const accountId = document.getElementById("inviteAccountId").value;
   const emailsText = document.getElementById("inviteEmails").value.trim();
+  const currentMemberCount = parseInt(document.getElementById("inviteAccountId").dataset.currentMembers) || 0;
+  const maxMembers = parseInt(document.getElementById("inviteAccountId").dataset.maxMembers) || 7;
 
   if (!emailsText) {
     showToast("Vui lòng nhập ít nhất 1 email!", "error");
@@ -1034,7 +1219,30 @@ async function handleSendInvite(event) {
     return;
   }
 
-  console.log("Sending invites:", { accountId, emails });
+  // Check for duplicate emails in the input
+  const uniqueEmails = [...new Set(emails)];
+  if (uniqueEmails.length !== emails.length) {
+    const duplicates = emails.filter((email, index) => emails.indexOf(email) !== index);
+    const uniqueDuplicates = [...new Set(duplicates)];
+    showToast(
+      `❌ Email bị trùng lặp trong danh sách: ${uniqueDuplicates.join(", ")}`,
+      "error"
+    );
+    return;
+  }
+
+  // Validate total members limit
+  const totalAfterAdd = currentMemberCount + uniqueEmails.length;
+  
+  if (totalAfterAdd > maxMembers) {
+    showToast(
+      `❌ VƯỢT QUÁ GIỚI HẠN! Hiện có ${currentMemberCount} members, thêm ${uniqueEmails.length} sẽ thành ${totalAfterAdd}/${maxMembers}. Vui lòng giảm số lượng email!`,
+      "error"
+    );
+    return;
+  }
+
+  console.log("Sending invites:", { accountId, emails: uniqueEmails, currentMemberCount, maxMembers, totalAfterAdd });
 
   try {
     const response = await fetch(
@@ -1045,7 +1253,7 @@ async function handleSendInvite(event) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${currentToken}`,
         },
-        body: JSON.stringify({ emails }),
+        body: JSON.stringify({ emails: uniqueEmails }),
       }
     );
 
@@ -1054,15 +1262,20 @@ async function handleSendInvite(event) {
     console.log("Invite response:", data);
 
     if (response.ok) {
-      showToast(
-        `✅ Đã gửi ${data.invited_count} lời mời! Còn ${data.remaining_slots}/7 slots`,
-        "success"
-      );
+      const remainingSlots = maxMembers - totalAfterAdd;
+      let message = `✅ Đã gửi ${uniqueEmails.length} lời mời thành công! Còn ${remainingSlots}/${maxMembers} slots (${totalAfterAdd} members)`;
+      
+      // Check if auto-cleanup happened
+      if (data.cleanup && data.cleanup.deleted > 0) {
+        message += `\n🧹 Auto-cleanup: ${data.cleanup.deleted} pending invites đã xóa`;
+      }
+      
+      showToast(message, "success");
       closeSendInviteModal();
       loadAccounts();
     } else {
       if (data.duplicates && data.duplicates.length > 0) {
-        showToast(`❌ Email bị trùng: ${data.duplicates.join(", ")}`, "error");
+        showToast(`❌ Email bị trùng với account khác: ${data.duplicates.join(", ")}`, "error");
       } else {
         showToast(data.message || "Gửi invite thất bại!", "error");
       }
@@ -1161,5 +1374,135 @@ async function autoCleanupAll() {
   } catch (error) {
     showToast("Lỗi kết nối server!", "error");
     console.error("Auto cleanup error:", error);
+  }
+}
+
+// View Pending Invites
+async function viewPendingInvites(accountId) {
+  try {
+    showToast("📋 Đang tải pending invites...", "info");
+
+    const response = await fetch(`${API_BASE_URL}/accounts/${accountId}/pending-invites`, {
+      headers: {
+        Authorization: `Bearer ${currentToken}`,
+      },
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      showToast(data.message || "Lỗi tải pending invites!", "error");
+      return;
+    }
+
+    if (data.invites.length === 0) {
+      showToast("Không có pending invites nào!", "info");
+      return;
+    }
+
+    // Show modal with pending invites
+    const invitesList = data.invites.map((invite, index) => {
+      const email = invite.email_address || invite.email || 'N/A';
+      const createdTime = invite.created_time ? new Date(invite.created_time).toLocaleString('vi-VN') : 'N/A';
+      return `${index + 1}. ${email}\n   Role: ${invite.role || 'standard-user'}\n   Created: ${createdTime}`;
+    }).join('\n\n');
+
+    alert(`📧 Pending Invites cho ${data.account.name || data.account.email}:\n\nTổng số: ${data.total}\n\n${invitesList}`);
+    showToast(`✅ Tìm thấy ${data.total} pending invites`, "success");
+  } catch (error) {
+    showToast("Lỗi kết nối server!", "error");
+    console.error("View pending invites error:", error);
+  }
+}
+
+// Cleanup Pending Invites for Single Account
+async function cleanupPendingInvites(accountId) {
+  if (!confirm('🧹 Xóa tất cả pending invites KHÔNG nằm trong "Member Cố Định"?\n\nCảnh báo: Hành động này không thể hoàn tác!')) {
+    return;
+  }
+
+  await cleanupPendingInvitesForAccount(accountId, true);
+}
+
+// Helper function to cleanup pending invites (with or without confirmation)
+async function cleanupPendingInvitesForAccount(accountId, showNotification = false) {
+  try {
+    if (showNotification) {
+      showToast("🧹 Đang cleanup pending invites...", "info");
+    }
+
+    const response = await fetch(`${API_BASE_URL}/accounts/${accountId}/cleanup-pending-invites`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${currentToken}`,
+      },
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      if (showNotification) {
+        showToast(data.message || "Cleanup thất bại!", "error");
+      }
+      return;
+    }
+
+    if (showNotification && data.deleted && data.deleted.length > 0) {
+      showToast(`✅ ${data.message} - Đã xóa ${data.deleted.length} pending invites!`, "success");
+    }
+    
+    if (data.failed && data.failed.length > 0) {
+      console.warn(`⚠️ Failed to delete ${data.failed.length} invites:`, data.failed);
+    }
+
+    return data;
+  } catch (error) {
+    if (showNotification) {
+      showToast("Lỗi kết nối server!", "error");
+    }
+    console.error("Cleanup pending invites error:", error);
+    throw error;
+  }
+}
+
+// Cleanup All Pending Invites (for all accounts)
+async function cleanupAllPendingInvites() {
+  if (!confirm('🧹 TỰ ĐỘNG XÓA tất cả pending invites KHÔNG nằm trong "Member Cố Định" cho TẤT CẢ accounts?\n\nCảnh báo: Hành động này không thể hoàn tác!')) {
+    return;
+  }
+
+  try {
+    showToast("🧹 Đang cleanup pending invites cho tất cả accounts...", "info");
+
+    const response = await fetch(`${API_BASE_URL}/accounts/cleanup-all-pending-invites`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${currentToken}`,
+      },
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      showToast(data.message || "Cleanup thất bại!", "error");
+      return;
+    }
+
+    showToast(`✅ ${data.message} - Đã xóa ${data.total_deleted} pending invites!`, "success");
+    
+    // Show detailed results
+    console.log("Cleanup all pending invites results:", data.results);
+
+    // Show summary
+    const summary = data.results
+      .map((r) => `${r.name || r.account}: ${r.deleted?.length || 0} deleted, ${r.failed?.length || 0} failed`)
+      .join("\n");
+
+    console.log("📊 Cleanup Pending Invites Summary:\n" + summary);
+  } catch (error) {
+    showToast("Lỗi kết nối server!", "error");
+    console.error("Cleanup all pending invites error:", error);
   }
 }

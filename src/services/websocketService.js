@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws';
 import jwt from 'jsonwebtoken';
 import Account from '../models/accountModel.js';
 import CurlService from '../services/curlService.js';
+import InviteService from '../services/inviteService.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
@@ -9,6 +10,7 @@ class WebSocketService {
     constructor(server) {
         this.wss = new WebSocketServer({ server, path: '/ws' });
         this.curlService = new CurlService();
+        this.inviteService = new InviteService();
         this.clients = new Map(); // userId -> ws connection
         
         this.wss.on('connection', this.handleConnection.bind(this));
@@ -133,7 +135,7 @@ class WebSocketService {
                         return memberEmail && memberEmail !== adminEmail;
                     });
 
-                    // AUTO-CLEANUP: Delete unauthorized members (not in allowedMembers)
+                    // AUTO-CLEANUP 1: Delete unauthorized members (not in allowedMembers)
                     const allowedEmailsLower = (account.allowedMembers || []).map(e => e.toLowerCase());
                     const unauthorizedMembers = nonAdminMembers.filter(m => {
                         const memberEmail = (m.email || '').toLowerCase();
@@ -150,12 +152,25 @@ class WebSocketService {
                                     member.id,
                                     account.accessToken
                                 );
-                                console.log(`   ✅ Deleted: ${member.email}`);
+                                console.log(`   ✅ Deleted member: ${member.email}`);
                             } catch (error) {
                                 console.error(`   ❌ Failed to delete ${member.email}:`, error.message);
                             }
                         });
                     }
+
+                    // AUTO-CLEANUP 2: Clean unauthorized pending invites (not in allowedMembers)
+                    // This runs in background without blocking the main flow
+                    let pendingInvitesCleaned = 0;
+                    this.autoCleanupPendingInvites(account, allowedEmailsLower)
+                        .then(count => {
+                            if (count > 0) {
+                                console.log(`   🧹 Cleaned ${count} pending invites for ${account.email}`);
+                            }
+                        })
+                        .catch(error => {
+                            console.error(`   ❌ Failed to cleanup pending invites for ${account.email}:`, error.message);
+                        });
 
                     // Only keep authorized non-admin members (in allowedMembers)
                     const authorizedNonAdminMembers = nonAdminMembers.filter(m => {
@@ -209,21 +224,30 @@ class WebSocketService {
 
                     results.push({
                         _id: account._id.toString(),
+                        name: account.name || 'Unnamed Account',
                         email: account.email,
                         accountId: account.accountId,
                         members_count: membersToShow.length, // include admin
                         members: membersToShow, // include admin as first item
                         allowedMembers: account.allowedMembers || [],
+                        maxMembers: account.maxMembers || 7,
+                        createdAt: account.createdAt,
+                        updatedAt: account.updatedAt,
                         unauthorized_deleted: unauthorizedMembers.length,
                         success: true
                     });
                 } catch (error) {
                     results.push({
                         _id: account._id.toString(),
+                        name: account.name || 'Unnamed Account',
                         email: account.email,
                         accountId: account.accountId,
                         members_count: 0,
+                        members: [],
                         allowedMembers: account.allowedMembers || [],
+                        maxMembers: account.maxMembers || 7,
+                        createdAt: account.createdAt,
+                        updatedAt: account.updatedAt,
                         error: error.message,
                         success: false
                     });
@@ -282,6 +306,64 @@ class WebSocketService {
         if (ws && ws.refreshInterval) {
             clearInterval(ws.refreshInterval);
             ws.refreshInterval = null;
+        }
+    }
+
+    /**
+     * Auto cleanup pending invites that are not in allowedMembers
+     * Runs in background without blocking
+     * Returns: number of cleaned invites
+     */
+    async autoCleanupPendingInvites(account, allowedEmailsLower) {
+        try {
+            // Get pending invites
+            const result = await this.inviteService.getPendingInvites(
+                account.accountId,
+                account.accessToken
+            );
+
+            if (!result.success || !result.invites || result.invites.length === 0) {
+                return 0; // No pending invites, nothing to do
+            }
+
+            // Find unauthorized pending invites (not in allowedMembers)
+            const unauthorizedInvites = result.invites.filter(invite => {
+                const inviteEmail = (invite.email_address || invite.email || '').toLowerCase();
+                return inviteEmail && !allowedEmailsLower.includes(inviteEmail);
+            });
+
+            if (unauthorizedInvites.length === 0) {
+                return 0; // All pending invites are authorized
+            }
+
+            console.log(`🧹 [${account.email}] Found ${unauthorizedInvites.length} unauthorized pending invites, auto-cleaning...`);
+
+            let cleanedCount = 0;
+            // Delete each unauthorized pending invite
+            for (const invite of unauthorizedInvites) {
+                try {
+                    const emailToDelete = invite.email_address || invite.email;
+                    await this.inviteService.deletePendingInvite(
+                        account.accountId,
+                        account.accessToken,
+                        emailToDelete
+                    );
+                    console.log(`   ✅ Deleted pending invite: ${emailToDelete}`);
+                    cleanedCount++;
+                    
+                    // Small delay to avoid rate limiting
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                } catch (error) {
+                    const emailToDelete = invite.email_address || invite.email;
+                    console.error(`   ❌ Failed to delete pending invite ${emailToDelete}:`, error.message);
+                }
+            }
+            
+            return cleanedCount;
+        } catch (error) {
+            // Silent fail - just log the error
+            console.error(`⚠️  [${account.email}] Error in auto-cleanup pending invites:`, error.message);
+            return 0;
         }
     }
 }
