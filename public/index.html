@@ -236,7 +236,10 @@
           <div class="stats-row">
             <div class="stat-box">
               <div class="stat-label">📊 Total Accounts</div>
-              <div class="stat-value" id="totalAccountsCount">0</div>
+              <div class="stat-value">
+                <span id="totalAccountsCount">0</span>
+                <span id="filteredAccountsCount" style="font-size: 12px; color: #9ca3af; margin-left: 4px;"></span>
+              </div>
             </div>
             <div class="stat-box">
               <div class="stat-label">👥 Total Members</div>
@@ -250,6 +253,76 @@
               <div class="stat-label">❌ Failed</div>
               <div class="stat-value" id="failedAccountsCount">0</div>
             </div>
+          </div>
+
+          <!-- Search & Sort Controls -->
+          <div style="display: flex; gap: 12px; margin-bottom: 16px; align-items: center; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 250px;">
+              <input 
+                type="text" 
+                id="searchInput" 
+                placeholder="🔍 Tìm kiếm theo tên, email, hoặc Account ID..."
+                onkeyup="handleSearch(this.value)"
+                style="width: 100%; padding: 10px 14px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; transition: border-color 0.3s;"
+                onfocus="this.style.borderColor='#3b82f6'"
+                onblur="this.style.borderColor='#e5e7eb'"
+              />
+            </div>
+            <div>
+              <select 
+                id="sortSelect" 
+                onchange="handleSortFromDropdown(this.value)"
+                style="padding: 10px 14px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; background: white; cursor: pointer;">
+                <option value="createdAt_desc">🆕 Mới nhất</option>
+                <option value="createdAt_asc">📅 Cũ nhất</option>
+                <option value="name_asc">🔤 Tên A-Z</option>
+                <option value="name_desc">🔤 Tên Z-A</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Date Filter Controls -->
+          <div style="display: flex; gap: 12px; margin-bottom: 16px; align-items: center; background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 12px; border-radius: 8px; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <label style="color: #e2e8f0; font-size: 14px; font-weight: 500;">📅 Lọc theo:</label>
+              <select 
+                id="dateFieldSelect"
+                onchange="handleDateFilterChange()"
+                style="padding: 8px 12px; border: 2px solid #334155; border-radius: 6px; font-size: 13px; background: #0f172a; color: #e2e8f0; cursor: pointer;">
+                <option value="createdAt">Ngày tạo</option>
+                <option value="updatedAt">Ngày cập nhật</option>
+              </select>
+            </div>
+            
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <label style="color: #e2e8f0; font-size: 14px;">Từ:</label>
+              <input 
+                type="date" 
+                id="dateFromInput"
+                onchange="handleDateFilterChange()"
+                style="padding: 8px 12px; border: 2px solid #334155; border-radius: 6px; font-size: 13px; background: #0f172a; color: #e2e8f0; cursor: pointer;"
+              />
+            </div>
+            
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <label style="color: #e2e8f0; font-size: 14px;">Đến:</label>
+              <input 
+                type="date" 
+                id="dateToInput"
+                onchange="handleDateFilterChange()"
+                style="padding: 8px 12px; border: 2px solid #334155; border-radius: 6px; font-size: 13px; background: #0f172a; color: #e2e8f0; cursor: pointer;"
+              />
+            </div>
+            
+            <button 
+              onclick="clearDateFilter()"
+              style="padding: 8px 16px; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; font-weight: 500; transition: all 0.3s;"
+              onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 8px rgba(239, 68, 68, 0.4)'"
+              onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none'">
+              🗑️ Xóa bộ lọc
+            </button>
+            
+            <div id="dateFilterInfo" style="color: #9ca3af; font-size: 12px; font-style: italic; margin-left: auto;"></div>
           </div>
 
           <!-- Accounts Table -->
@@ -287,6 +360,10 @@
               </tbody>
             </table>
           </div>
+
+          <!-- Pagination Controls -->
+          <div id="paginationControls" style="margin-top: 16px;"></div>
+
         </div>
       </div>
     </div>

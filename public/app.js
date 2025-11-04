@@ -13,6 +13,19 @@ let wsConnected = false;
 let countdownInterval = null;
 let countdownSeconds = 30;
 
+// Pagination State
+let currentPage = 1;
+let totalPages = 1;
+let totalAccounts = 0;
+let currentSearch = '';
+let currentSortBy = 'createdAt';
+let currentSortOrder = 'desc';
+
+// Date Filter State
+let currentDateFrom = '';
+let currentDateTo = '';
+let currentDateField = 'createdAt';
+
 // Initialize App
 document.addEventListener("DOMContentLoaded", () => {
   if (currentToken) {
@@ -403,30 +416,257 @@ function copyApiKey() {
   });
 }
 
-// Load Accounts
-async function loadAccounts() {
+// Pagination Helper Functions
+function nextPage() {
+  if (currentPage < totalPages) {
+    loadAccounts(currentPage + 1);
+  }
+}
+
+function prevPage() {
+  if (currentPage > 1) {
+    loadAccounts(currentPage - 1);
+  }
+}
+
+function goToPage(page) {
+  if (page >= 1 && page <= totalPages) {
+    loadAccounts(page);
+  }
+}
+
+// Search with debounce
+let searchTimeout;
+function handleSearch(searchValue) {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    currentSearch = searchValue.trim();
+    currentPage = 1; // Reset to first page on new search
+    loadAccounts(1);
+  }, 500); // 500ms debounce
+}
+
+// Sort change handler
+function handleSortChange(sortBy, sortOrder) {
+  currentSortBy = sortBy;
+  currentSortOrder = sortOrder;
+  currentPage = 1; // Reset to first page
+  loadAccounts(1);
+}
+
+// Handle sort dropdown change
+function handleSortFromDropdown(value) {
+  const [sortBy, sortOrder] = value.split('_');
+  handleSortChange(sortBy, sortOrder);
+}
+
+// Date Filter Functions
+function handleDateFilterChange() {
+  const dateFrom = document.getElementById('dateFromInput').value;
+  const dateTo = document.getElementById('dateToInput').value;
+  const dateField = document.getElementById('dateFieldSelect').value;
+  
+  currentDateFrom = dateFrom;
+  currentDateTo = dateTo;
+  currentDateField = dateField;
+  currentPage = 1; // Reset to first page
+  
+  updateDateFilterInfo();
+  loadAccounts(1);
+}
+
+function clearDateFilter() {
+  document.getElementById('dateFromInput').value = '';
+  document.getElementById('dateToInput').value = '';
+  document.getElementById('dateFieldSelect').value = 'createdAt';
+  
+  currentDateFrom = '';
+  currentDateTo = '';
+  currentDateField = 'createdAt';
+  currentPage = 1;
+  
+  updateDateFilterInfo();
+  loadAccounts(1);
+}
+
+function updateDateFilterInfo() {
+  const infoElement = document.getElementById('dateFilterInfo');
+  
+  if (!currentDateFrom && !currentDateTo) {
+    infoElement.textContent = '';
+    return;
+  }
+  
+  const fieldName = currentDateField === 'createdAt' ? 'Ngày tạo' : 'Ngày cập nhật';
+  let infoText = `✓ Lọc ${fieldName}: `;
+  
+  if (currentDateFrom && currentDateTo) {
+    const fromDate = new Date(currentDateFrom).toLocaleDateString('vi-VN');
+    const toDate = new Date(currentDateTo).toLocaleDateString('vi-VN');
+    infoText += `${fromDate} → ${toDate}`;
+  } else if (currentDateFrom) {
+    const fromDate = new Date(currentDateFrom).toLocaleDateString('vi-VN');
+    infoText += `từ ${fromDate}`;
+  } else if (currentDateTo) {
+    const toDate = new Date(currentDateTo).toLocaleDateString('vi-VN');
+    infoText += `đến ${toDate}`;
+  }
+  
+  infoElement.textContent = infoText;
+  infoElement.style.color = '#10b981'; // Green color
+  infoElement.style.fontWeight = '500';
+}
+
+// Render Pagination Controls
+function renderPagination() {
+  const paginationContainer = document.getElementById('paginationControls');
+  
+  if (!paginationContainer) {
+    console.warn('Pagination container not found');
+    return;
+  }
+
+  if (totalPages <= 1) {
+    paginationContainer.innerHTML = '';
+    return;
+  }
+
+  let paginationHTML = '<div class="pagination">';
+  
+  // Previous button
+  paginationHTML += `
+    <button 
+      onclick="prevPage()" 
+      ${currentPage === 1 ? 'disabled' : ''}
+      class="btn-pagination">
+      ← Trước
+    </button>
+  `;
+
+  // Page numbers (show max 5 pages)
+  const maxVisiblePages = 5;
+  let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+  let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+  
+  if (endPage - startPage < maxVisiblePages - 1) {
+    startPage = Math.max(1, endPage - maxVisiblePages + 1);
+  }
+
+  if (startPage > 1) {
+    paginationHTML += `<button onclick="goToPage(1)" class="btn-pagination">1</button>`;
+    if (startPage > 2) {
+      paginationHTML += `<span style="padding: 0 8px;">...</span>`;
+    }
+  }
+
+  for (let i = startPage; i <= endPage; i++) {
+    paginationHTML += `
+      <button 
+        onclick="goToPage(${i})" 
+        class="btn-pagination ${i === currentPage ? 'active' : ''}">
+        ${i}
+      </button>
+    `;
+  }
+
+  if (endPage < totalPages) {
+    if (endPage < totalPages - 1) {
+      paginationHTML += `<span style="padding: 0 8px;">...</span>`;
+    }
+    paginationHTML += `<button onclick="goToPage(${totalPages})" class="btn-pagination">${totalPages}</button>`;
+  }
+
+  // Next button
+  paginationHTML += `
+    <button 
+      onclick="nextPage()" 
+      ${currentPage === totalPages ? 'disabled' : ''}
+      class="btn-pagination">
+      Tiếp →
+    </button>
+  `;
+
+  // Page info
+  paginationHTML += `
+    <span style="margin-left: 16px; color: #9ca3af;">
+      Trang ${currentPage} / ${totalPages} (${totalAccounts} tài khoản)
+    </span>
+  `;
+
+  paginationHTML += '</div>';
+  paginationContainer.innerHTML = paginationHTML;
+}
+
+// Load Accounts with Pagination & Search
+async function loadAccounts(page = 1) {
   const tbody = document.getElementById("accountsTableBody");
   tbody.innerHTML =
     '<tr><td colspan="9" class="loading-cell">Đang tải danh sách accounts...</td></tr>';
 
   try {
-    const response = await fetch(`${API_BASE_URL}/accounts`, {
+    // Build query parameters
+    const params = new URLSearchParams({
+      page: page,
+      limit: 20,
+      search: currentSearch,
+      sortBy: currentSortBy,
+      sortOrder: currentSortOrder
+    });
+
+    // Add date filter parameters if set
+    if (currentDateFrom) {
+      params.append('dateFrom', currentDateFrom);
+    }
+    if (currentDateTo) {
+      params.append('dateTo', currentDateTo);
+    }
+    if (currentDateFrom || currentDateTo) {
+      params.append('dateField', currentDateField);
+    }
+
+    const response = await fetch(`${API_BASE_URL}/accounts?${params}`, {
       headers: {
         Authorization: `Bearer ${currentToken}`,
       },
     });
 
-    const accounts = await response.json();
+    const result = await response.json();
+
+    if (!result.success) {
+      throw new Error(result.message || 'Failed to load accounts');
+    }
+
+    const accounts = result.data;
+    const pagination = result.pagination;
+
+    // Update pagination state
+    currentPage = pagination.currentPage;
+    totalPages = pagination.totalPages;
+    totalAccounts = pagination.totalAccounts;
 
     console.log("Loaded accounts:", accounts); // Debug
+    console.log("Pagination:", pagination); // Debug
+
+    // Update stats
+    document.getElementById("totalAccountsCount").textContent = totalAccounts;
+
+    // Show search results info
+    if (currentSearch) {
+      document.getElementById("filteredAccountsCount").textContent = 
+        `(${totalAccounts} kết quả)`;
+    } else {
+      document.getElementById("filteredAccountsCount").textContent = "";
+    }
 
     if (accounts.length === 0) {
-      tbody.innerHTML =
-        '<tr><td colspan="9" class="loading-cell">Chưa có account nào. Hãy thêm account đầu tiên!</td></tr>';
-      document.getElementById("totalAccountsCount").textContent = "0";
+      tbody.innerHTML = currentSearch 
+        ? '<tr><td colspan="9" class="loading-cell">🔍 Không tìm thấy kết quả phù hợp</td></tr>'
+        : '<tr><td colspan="9" class="loading-cell">Chưa có account nào. Hãy thêm account đầu tiên!</td></tr>';
+      
       document.getElementById("totalMembersCount").textContent = "0";
       document.getElementById("successAccountsCount").textContent = "0";
       document.getElementById("failedAccountsCount").textContent = "0";
+      renderPagination();
       return;
     }
 
@@ -446,6 +686,9 @@ async function loadAccounts() {
         const accountEmail = account.email;
         const maxMembers = account.maxMembers || 7;
 
+        // Calculate global index
+        const globalIndex = (currentPage - 1) * 20 + index + 1;
+
         // Format dates
         const createdDate = account.createdAt ? new Date(account.createdAt).toLocaleDateString('vi-VN', {
           day: '2-digit',
@@ -460,7 +703,7 @@ async function loadAccounts() {
 
         return `
                 <tr>
-                    <td>${index + 1}</td>
+                    <td>${globalIndex}</td>
                     <td>
                         <div style="font-weight: 600; color: #60a5fa; font-size: 14px;">${accountName}</div>
                         <div style="font-size: 11px; color: #9ca3af; margin-top: 2px;">${accountEmail}</div>
@@ -526,10 +769,14 @@ async function loadAccounts() {
       });
     }, 0);
 
-    document.getElementById("totalAccountsCount").textContent = accounts.length;
+    // Render pagination controls
+    renderPagination();
 
-    // Start WebSocket connection after loading accounts
-    connectWebSocket();
+    // Start WebSocket connection after loading accounts (only once)
+    if (!window.wsConnected) {
+      connectWebSocket();
+      window.wsConnected = true;
+    }
   } catch (error) {
     tbody.innerHTML =
       '<tr><td colspan="6" class="loading-cell">Lỗi tải danh sách accounts!</td></tr>';

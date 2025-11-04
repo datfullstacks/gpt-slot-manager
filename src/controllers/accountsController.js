@@ -55,12 +55,89 @@ class AccountsController {
   async getAccounts(req, res) {
     try {
       const userId = req.userId; // From auth middleware
-      const accounts = await Account.find({ userId }).select("-accessToken"); // Don't expose tokens
-      res.status(200).json(accounts);
+      
+      // Pagination parameters
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 20;
+      const skip = (page - 1) * limit;
+      
+      // Search parameters
+      const search = req.query.search || '';
+      
+      // Date filter parameters
+      const dateFrom = req.query.dateFrom; // ISO string or date string
+      const dateTo = req.query.dateTo;
+      const dateField = req.query.dateField || 'createdAt'; // 'createdAt' or 'updatedAt'
+      
+      // Sort parameters
+      const sortBy = req.query.sortBy || 'createdAt';
+      const sortOrder = req.query.sortOrder || 'desc';
+      
+      // Build query
+      let query = { userId };
+      
+      // Add search filter
+      if (search) {
+        query.$or = [
+          { name: { $regex: search, $options: 'i' } },
+          { email: { $regex: search, $options: 'i' } },
+          { accountId: { $regex: search, $options: 'i' } }
+        ];
+      }
+      
+      // Add date range filter
+      if (dateFrom || dateTo) {
+        query[dateField] = {};
+        
+        if (dateFrom) {
+          const fromDate = new Date(dateFrom);
+          fromDate.setHours(0, 0, 0, 0); // Start of day
+          query[dateField].$gte = fromDate;
+        }
+        
+        if (dateTo) {
+          const toDate = new Date(dateTo);
+          toDate.setHours(23, 59, 59, 999); // End of day
+          query[dateField].$lte = toDate;
+        }
+      }
+      
+      // Build sort object
+      const sortObject = {};
+      sortObject[sortBy] = sortOrder === 'desc' ? -1 : 1;
+      
+      // Execute query with pagination
+      const accounts = await Account.find(query)
+        .select("-accessToken") // Don't expose tokens
+        .sort(sortObject)
+        .limit(limit)
+        .skip(skip);
+      
+      // Get total count for pagination
+      const totalAccounts = await Account.countDocuments(query);
+      const totalPages = Math.ceil(totalAccounts / limit);
+      
+      // Response with pagination metadata
+      res.status(200).json({
+        success: true,
+        data: accounts,
+        pagination: {
+          currentPage: page,
+          totalPages: totalPages,
+          totalAccounts: totalAccounts,
+          limit: limit,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1
+        }
+      });
     } catch (error) {
       res
         .status(500)
-        .json({ message: "Error retrieving accounts", error: error.message });
+        .json({ 
+          success: false,
+          message: "Error retrieving accounts", 
+          error: error.message 
+        });
     }
   }
 

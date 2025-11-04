@@ -11,6 +11,8 @@ router.post('/login', authController.login.bind(authController));
 
 // Protected routes
 router.get('/profile', authMiddleware, authController.getProfile.bind(authController));
-router.post('/verify-code', authMiddleware, authController.verifyAccessCode.bind(authController));
+
+// NOTE: Access code verification moved to /api/access-codes/verify
+// Old endpoint removed to prevent confusion
 
 export default router;
