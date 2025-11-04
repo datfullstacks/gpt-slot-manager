@@ -6,6 +6,9 @@
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
+    "generate-codes": "node scripts/generate-access-codes.js",
+    "migrate-users": "node scripts/migrate-old-users.js",
+    "reset-all": "node scripts/reset-all-users.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {

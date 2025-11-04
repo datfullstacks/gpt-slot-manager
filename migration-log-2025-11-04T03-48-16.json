@@ -1,0 +1,18 @@
+[
+  {
+    "username": "123",
+    "email": "12@gmail.com",
+    "accessCode": "29GB884JZUU3G68E",
+    "isVerified": false,
+    "createdAt": "2025-11-02T17:56:41.093Z",
+    "migratedAt": "2025-11-04T03:48:16.234Z"
+  },
+  {
+    "username": "Lienmeo",
+    "email": "hoangtiendat120@gmail.com",
+    "accessCode": "NMLC435JQRWP5CN6",
+    "isVerified": false,
+    "createdAt": "2025-11-04T03:36:04.652Z",
+    "migratedAt": "2025-11-04T03:48:16.406Z"
+  }
+]

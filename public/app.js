@@ -96,7 +96,15 @@ async function handleRegister(event) {
     const data = await response.json();
 
     if (response.ok) {
-      showToast("Đăng ký thành công! Đang đăng nhập...", "success");
+      showToast("✅ Đăng ký thành công!", "success");
+      
+      // Show notice about contacting admin for access code
+      if (data.notice) {
+        setTimeout(() => {
+          showToast(data.notice, "info", 10000);
+        }, 1500);
+      }
+      
       currentToken = data.token;
       localStorage.setItem("token", data.token);
       setTimeout(() => {
@@ -130,12 +138,44 @@ async function handleLogin(event) {
     const data = await response.json();
 
     if (response.ok) {
+      // Check if user is banned
+      if (data.user && data.user.isBanned) {
+        showToast(
+          `🚫 ${data.message || 'Tài khoản đã bị khóa vĩnh viễn'}\n\nLý do: ${data.user.banReason || data.banReason || 'Nhập sai mã truy cập 3 lần'}`,
+          "error",
+          8000
+        );
+        return;
+      }
+
       showToast("Đăng nhập thành công!", "success");
       currentToken = data.token;
       localStorage.setItem("token", data.token);
+      
+      // Show remaining attempts if not verified yet
+      if (data.user && !data.user.isCodeVerified && data.user.failedAttempts > 0) {
+        const remaining = data.user.remainingAttempts || 0;
+        if (remaining > 0) {
+          showToast(
+            `⚠️ Lưu ý: Bạn đã nhập sai mã ${data.user.failedAttempts} lần. Còn ${remaining} lần thử!`,
+            "warning",
+            6000
+          );
+        }
+      }
+      
       loadUserProfile();
     } else {
-      showToast(data.message || "Đăng nhập thất bại!", "error");
+      // Check for ban status in error response
+      if (data.isBanned) {
+        showToast(
+          `🚫 ${data.message}\n\nBanned at: ${new Date(data.bannedAt).toLocaleString('vi-VN')}`,
+          "error",
+          8000
+        );
+      } else {
+        showToast(data.message || "Đăng nhập thất bại!", "error");
+      }
     }
   } catch (error) {
     showToast("Lỗi kết nối server!", "error");
@@ -167,14 +207,52 @@ async function loadUserProfile() {
     });
 
     if (response.ok) {
-      currentUser = await response.json();
+      const data = await response.json();
+      currentUser = data.user || data;
+      
       document.getElementById("username").textContent = currentUser.username;
       document.getElementById("userEmail").textContent = currentUser.email;
       showDashboard();
 
+      // Check if user is banned
+      if (currentUser.isBanned) {
+        showToast(
+          `🚫 Tài khoản đã bị khóa vĩnh viễn!\n\nLý do: ${currentUser.banReason || 'Nhập sai mã truy cập 3 lần'}\nThời gian: ${new Date(currentUser.bannedAt).toLocaleString('vi-VN')}`,
+          "error",
+          10000
+        );
+        
+        // Auto logout after 5 seconds
+        setTimeout(() => {
+          handleLogout();
+        }, 5000);
+        return;
+      }
+
       // Check if user needs to verify code
       if (!currentUser.isCodeVerified) {
         showCodeVerificationSection();
+        
+        // Show warning if has failed attempts
+        const failedAttempts = currentUser.codeAttempts?.failed || 0;
+        const remainingAttempts = currentUser.remainingAttempts || (3 - failedAttempts);
+        
+        if (failedAttempts > 0) {
+          const helpText = document.querySelector("#codeVerificationSection .help-text");
+          if (helpText) {
+            helpText.innerHTML = `⚠️ Bạn đã nhập sai ${failedAttempts} lần. Còn lại <strong style="color: #ef4444">${remainingAttempts}/3</strong> lần thử!`;
+            helpText.style.color = remainingAttempts === 1 ? "#ef4444" : "#f59e0b";
+            helpText.style.fontWeight = "bold";
+          }
+          
+          if (remainingAttempts === 1) {
+            showToast(
+              `🚨 CẢNH BÁO: Bạn chỉ còn 1 lần thử cuối!\n\nNhập sai sẽ bị khóa tài khoản vĩnh viễn!`,
+              "warning",
+              10000
+            );
+          }
+        }
       } else {
         showAccountsSection();
         loadAccounts();
@@ -201,19 +279,31 @@ function showAccountsSection() {
   document.getElementById("accountsSection").style.display = "block";
 }
 
-// Handle Verify Code
+// Handle Verify Code (NEW: Secure Access Code System)
 async function handleVerifyCode(event) {
   event.preventDefault();
 
   const code = document.getElementById("accessCodeInput").value.trim();
+  const submitBtn = event.target.querySelector('button[type="submit"]');
 
   if (!code) {
     showToast("Vui lòng nhập mã code!", "error");
     return;
   }
 
+  // Validate code format (16 characters)
+  if (code.length !== 16) {
+    showToast("Mã code phải có 16 ký tự!", "error");
+    return;
+  }
+
+  // Disable button during verification
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Đang xác thực...";
+
   try {
-    const response = await fetch(`${API_BASE_URL}/auth/verify-code`, {
+    // NEW ENDPOINT: /api/access-codes/verify
+    const response = await fetch(`${API_BASE_URL}/access-codes/verify`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -225,16 +315,83 @@ async function handleVerifyCode(event) {
     const data = await response.json();
 
     if (response.ok) {
-      showToast("Xác thực thành công! 🎉", "success");
+      // Success
+      showToast("✅ " + (data.message || "Xác thực thành công!"), "success");
       currentUser.isCodeVerified = true;
       showAccountsSection();
       loadAccounts();
+      
+      // Clear input
+      document.getElementById("accessCodeInput").value = "";
     } else {
-      showToast(data.message || "Mã code không đúng!", "error");
+      // Failed attempt
+      const errorMessage = data.message || "Mã code không đúng!";
+      
+      // Check if banned
+      if (data.isBanned) {
+        showToast(
+          `🚫 ${errorMessage}\n\nTài khoản đã bị khóa vĩnh viễn vào ${new Date(data.bannedAt).toLocaleString('vi-VN')}`,
+          "error",
+          8000
+        );
+        
+        // Auto logout after 3 seconds
+        setTimeout(() => {
+          showToast("Đang đăng xuất...", "info");
+          handleLogout();
+        }, 3000);
+        
+        submitBtn.disabled = true;
+        submitBtn.textContent = "🚫 Tài khoản bị khóa";
+        return;
+      }
+      
+      // Show remaining attempts
+      if (data.remainingAttempts !== undefined) {
+        const remainingText = `\n\n⚠️ Còn lại: ${data.remainingAttempts}/3 lần thử`;
+        
+        // Warning for last attempt
+        if (data.remainingAttempts === 1) {
+          showToast(
+            `❌ ${errorMessage}${remainingText}\n\n🚨 CẢNH BÁO: Nhập sai lần nữa sẽ bị khóa tài khoản vĩnh viễn!`,
+            "error",
+            10000
+          );
+        } else if (data.remainingAttempts === 0) {
+          showToast(
+            `🚫 ${errorMessage}\n\nTài khoản đã bị khóa vĩnh viễn do nhập sai 3 lần!`,
+            "error",
+            8000
+          );
+          
+          // Auto logout
+          setTimeout(() => {
+            handleLogout();
+          }, 3000);
+        } else {
+          showToast(`❌ ${errorMessage}${remainingText}`, "error", 5000);
+        }
+      } else {
+        showToast(errorMessage, "error");
+      }
+      
+      // Update help text with remaining attempts
+      if (data.remainingAttempts > 0) {
+        const helpText = document.querySelector("#codeVerificationSection .help-text");
+        if (helpText) {
+          helpText.innerHTML = `⚠️ Còn lại <strong style="color: #ef4444">${data.remainingAttempts}/3</strong> lần thử. Nhập sai ${data.remainingAttempts} lần nữa sẽ bị khóa vĩnh viễn!`;
+          helpText.style.color = data.remainingAttempts === 1 ? "#ef4444" : "#f59e0b";
+          helpText.style.fontWeight = "bold";
+        }
+      }
     }
   } catch (error) {
     showToast("Lỗi kết nối server!", "error");
     console.error("Verify code error:", error);
+  } finally {
+    // Re-enable button
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Xác Thực";
   }
 }
 
