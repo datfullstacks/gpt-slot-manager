@@ -200,7 +200,7 @@
               <button onclick="showAddAccountModal()" class="btn btn-success">
                 ➕ Thêm Account
               </button>
-              <button onclick="sendInvitesToAll()" class="btn btn-primary">
+              <!-- <button onclick="sendInvitesToAll()" class="btn btn-primary">
                 📧 Gửi Invite Tất Cả
               </button>
               <button
@@ -220,7 +220,7 @@
                 "
               >
                 🧹 Cleanup Pending Invites
-              </button>
+              </button> -->
               <div class="countdown-display">
                 <span style="font-size: 14px; color: #666">Next check: </span>
                 <span
@@ -349,13 +349,14 @@
                   <th style="width: 180px">Member Cố Định</th>
                   <th style="width: 90px">Pending Invites</th>
                   <th style="width: 140px">Dates</th>
-                  <th style="width: 90px">Status</th>
+                  <th style="width: 100px">Next Check</th>
+                  <th style="width: 120px">Status</th>
                   <th style="width: 200px">Actions</th>
                 </tr>
               </thead>
               <tbody id="accountsTableBody">
                 <tr>
-                  <td colspan="9" class="loading-cell">Đang tải dữ liệu...</td>
+                  <td colspan="10" class="loading-cell">Đang tải dữ liệu...</td>
                 </tr>
               </tbody>
             </table>

@@ -141,6 +141,31 @@ class AccountsController {
     }
   }
 
+  // Get single account by ID (for row updates)
+  async getAccountById(req, res) {
+    try {
+      const { id } = req.params;
+      const userId = req.userId;
+
+      const account = await Account.findOne({ _id: id, userId });
+
+      if (!account) {
+        return res.status(404).json({
+          success: false,
+          message: 'Account not found'
+        });
+      }
+
+      res.status(200).json(account);
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Error retrieving account',
+        error: error.message
+      });
+    }
+  }
+
   async processAccounts(req, res) {
     try {
       const userId = req.userId; // From auth middleware
@@ -335,6 +360,16 @@ class AccountsController {
         }
       }
 
+      // ✅ FIRST: Add emails to allowedMembers to prevent cleanup
+      // This ensures that even if cleanup runs during invite sending,
+      // the emails are already "protected"
+      if (emailsToInvite.length > 0 && !account.allowedMembers.some(e => emailsToInvite.includes(e))) {
+        console.log(`🔒 Adding ${emailsToInvite.length} emails to allowedMembers BEFORE sending invites...`);
+        account.allowedMembers = [...new Set([...account.allowedMembers, ...emailsToInvite])];
+        await account.save();
+        console.log(`✅ Protected emails saved to allowedMembers`);
+      }
+
       // Send invites
       const result = await this.inviteService.sendInvites(
         account.accountId,
@@ -343,18 +378,25 @@ class AccountsController {
         true
       );
 
+      // ⏳ Wait a bit to ensure MongoDB and ChatGPT have updated
+      // This prevents race condition with auto-cleanup
+      await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay
+
+      console.log(`✅ Invites sent and delay completed. Emails are now safe from cleanup.`);
+
       res.status(200).json({
         message: "Invites sent successfully",
         account: account.email,
         invited_count: result.invited_count,
-        total_allowed_members: currentAllowedMembers.length,
-        remaining_slots: 7 - currentAllowedMembers.length,
+        total_allowed_members: account.allowedMembers.length,
+        remaining_slots: 7 - account.allowedMembers.length,
         cleanup: cleanupResult ? {
           deleted: cleanupResult.deleted?.length || 0,
           failed: cleanupResult.failed?.length || 0,
           emails_deleted: cleanupResult.deleted || []
         } : null,
         data: result.data,
+        protected_emails: emailsToInvite, // Show which emails were added to allowedMembers
       });
     } catch (error) {
       console.error("Error sending invites:", error);

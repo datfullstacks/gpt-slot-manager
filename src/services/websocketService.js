@@ -12,6 +12,8 @@ class WebSocketService {
         this.curlService = new CurlService();
         this.inviteService = new InviteService();
         this.clients = new Map(); // userId -> ws connection
+        this.accountTimers = new Map(); // accountId -> timeout handle
+        this.userAccountTimers = new Map(); // userId -> Set of accountIds
         
         this.wss.on('connection', this.handleConnection.bind(this));
         console.log('✅ WebSocket server initialized on /ws');
@@ -34,9 +36,10 @@ class WebSocketService {
         });
 
         ws.on('close', () => {
-            // Remove client from map
+            // Remove client from map and clear all account timers
             for (const [userId, client] of this.clients.entries()) {
                 if (client === ws) {
+                    this.stopAllAccountTimers(userId);
                     this.clients.delete(userId);
                     console.log(`🔌 Client disconnected: ${userId}`);
                     break;
@@ -70,25 +73,306 @@ class WebSocketService {
             this.clients.set(userId, ws);
             console.log(`✅ Client subscribed: ${userId}`);
             
-            // Send initial data
-            await this.sendMembersCount(userId);
-            
-            // Start auto-refresh every 30s
-            this.startAutoRefresh(userId);
+            // Start per-account auto-refresh with staggered timing
+            await this.startPerAccountRefresh(userId);
             
             ws.send(JSON.stringify({ 
                 type: 'subscribed',
-                message: 'Auto-refresh started (every 30s)' 
+                message: 'Per-account auto-refresh started (staggered 30s intervals)' 
             }));
         } else if (type === 'unsubscribe') {
+            this.stopAllAccountTimers(userId);
             this.clients.delete(userId);
             ws.send(JSON.stringify({ 
                 type: 'unsubscribed',
                 message: 'Auto-refresh stopped' 
             }));
         } else if (type === 'refresh') {
-            // Manual refresh
-            await this.sendMembersCount(userId);
+            // Manual refresh - trigger immediate check for all accounts
+            await this.triggerImmediateRefreshAll(userId);
+        }
+    }
+
+    /**
+     * Start per-account refresh with staggered timing
+     * Each account gets its own timer scheduled at different intervals
+     */
+    async startPerAccountRefresh(userId) {
+        try {
+            // Get all accounts for this user
+            const accounts = await Account.find({ userId });
+            
+            if (accounts.length === 0) {
+                console.log(`ℹ️  No accounts found for user ${userId}`);
+                return;
+            }
+
+            // Initialize account tracking for this user
+            if (!this.userAccountTimers.has(userId)) {
+                this.userAccountTimers.set(userId, new Set());
+            }
+
+            // Stagger initial checks: Account 1 @ 0s, Account 2 @ 30s, Account 3 @ 60s, etc.
+            accounts.forEach((account, index) => {
+                const accountId = account._id.toString();
+                const delaySeconds = index * 30; // Stagger by 30 seconds
+                
+                console.log(`⏰ Scheduling account ${index + 1}/${accounts.length} (${account.email}) - first check in ${delaySeconds}s`);
+                
+                // Track this account for the user
+                this.userAccountTimers.get(userId).add(accountId);
+                
+                // Schedule first check
+                this.scheduleAccountCheck(accountId, userId, delaySeconds);
+            });
+
+            console.log(`✅ Started staggered refresh for ${accounts.length} accounts (user: ${userId})`);
+        } catch (error) {
+            console.error(`Error starting per-account refresh for user ${userId}:`, error);
+        }
+    }
+
+    /**
+     * Schedule a check for a specific account
+     * @param {string} accountId - Account database ID
+     * @param {string} userId - User ID
+     * @param {number} delaySeconds - Delay in seconds before check
+     */
+    scheduleAccountCheck(accountId, userId, delaySeconds = 30) {
+        // Clear existing timer for this account
+        if (this.accountTimers.has(accountId)) {
+            clearTimeout(this.accountTimers.get(accountId));
+        }
+
+        // Schedule new check
+        const timeoutHandle = setTimeout(async () => {
+            await this.checkSingleAccount(accountId, userId);
+            
+            // Schedule next check (30s from now) if client still connected
+            const ws = this.clients.get(userId);
+            if (ws && ws.readyState === 1) {
+                this.scheduleAccountCheck(accountId, userId, 30);
+            }
+        }, delaySeconds * 1000);
+
+        this.accountTimers.set(accountId, timeoutHandle);
+    }
+
+    /**
+     * Check a single account and send update
+     * @param {string} accountId - Account database ID
+     * @param {string} userId - User ID
+     */
+    async checkSingleAccount(accountId, userId) {
+        const ws = this.clients.get(userId);
+        if (!ws || ws.readyState !== 1) {
+            return;
+        }
+
+        try {
+            console.log(`🔍 Checking account: ${accountId}`);
+            
+            // Get account from database
+            const account = await Account.findById(accountId);
+            if (!account) {
+                console.error(`Account not found: ${accountId}`);
+                return;
+            }
+
+            let result;
+            try {
+                const data = await this.curlService.executeCurl(
+                    account.accountId,
+                    account.accessToken,
+                    account.additionalHeaders || {}
+                );
+                
+                // Prepare members list: include admin as a visible member and calculate counts accordingly
+                const adminEmail = account.email ? account.email.toLowerCase() : '';
+                const allMembers = data.items || [];
+
+                // Non-admin members (actual user members)
+                const nonAdminMembers = allMembers.filter(m => {
+                    const memberEmail = (m.email || '').toLowerCase();
+                    return memberEmail && memberEmail !== adminEmail;
+                });
+
+                // AUTO-CLEANUP 1: Delete unauthorized members (not in allowedMembers)
+                const allowedEmailsLower = (account.allowedMembers || []).map(e => e.toLowerCase());
+                const unauthorizedMembers = nonAdminMembers.filter(m => {
+                    const memberEmail = (m.email || '').toLowerCase();
+                    return !allowedEmailsLower.includes(memberEmail);
+                });
+
+                // Delete unauthorized members in background (don't wait)
+                if (unauthorizedMembers.length > 0) {
+                    console.log(`🧹 [${account.email}] Found ${unauthorizedMembers.length} unauthorized members, auto-deleting...`);
+                    for (const member of unauthorizedMembers) {
+                        try {
+                            await this.curlService.deleteMember(
+                                account.accountId,
+                                member.id,
+                                account.accessToken
+                            );
+                            console.log(`   ✅ Deleted member: ${member.email}`);
+                        } catch (error) {
+                            console.error(`   ❌ Failed to delete ${member.email}:`, error.message);
+                        }
+                    }
+                }
+
+                // AUTO-CLEANUP 2: Clean unauthorized pending invites (not in allowedMembers)
+                this.autoCleanupPendingInvites(account, allowedEmailsLower)
+                    .then(count => {
+                        if (count > 0) {
+                            console.log(`   🧹 Cleaned ${count} pending invites for ${account.email}`);
+                        }
+                    })
+                    .catch(error => {
+                        console.error(`   ❌ Failed to cleanup pending invites for ${account.email}:`, error.message);
+                    });
+
+                // Only keep authorized non-admin members (in allowedMembers)
+                const authorizedNonAdminMembers = nonAdminMembers.filter(m => {
+                    const memberEmail = (m.email || '').toLowerCase();
+                    return allowedEmailsLower.includes(memberEmail);
+                });
+
+                // AUTO-LIMIT: If total members (admin + authorized) > 8, delete newest members
+                const MAX_MEMBERS = 8;
+                const totalCount = 1 + authorizedNonAdminMembers.length; // 1 for admin
+                
+                let finalAuthorizedMembers = authorizedNonAdminMembers;
+                
+                if (totalCount > MAX_MEMBERS) {
+                    const excessCount = totalCount - MAX_MEMBERS;
+                    console.log(`⚠️  [${account.email}] Total ${totalCount} members exceeds limit ${MAX_MEMBERS}. Deleting ${excessCount} newest members...`);
+                    
+                    // Sort by created_time DESC (newest first) to identify newest members
+                    const sortedMembers = [...authorizedNonAdminMembers].sort((a, b) => {
+                        const timeA = new Date(a.created_time || a.created_at || 0).getTime();
+                        const timeB = new Date(b.created_time || b.created_at || 0).getTime();
+                        return timeB - timeA; // DESC: newest first
+                    });
+                    
+                    // Take first N members as excess (newest members)
+                    const membersToDelete = sortedMembers.slice(0, excessCount);
+                    
+                    // Delete in background
+                    for (const member of membersToDelete) {
+                        try {
+                            await this.curlService.deleteMember(
+                                account.accountId,
+                                member.id,
+                                account.accessToken
+                            );
+                            console.log(`   ✅ Deleted newest member: ${member.email}`);
+                        } catch (error) {
+                            console.error(`   ❌ Failed to delete ${member.email}:`, error.message);
+                        }
+                    }
+                    
+                    // Keep only the remaining members (oldest members that fit in limit)
+                    finalAuthorizedMembers = sortedMembers.slice(excessCount);
+                }
+
+                // Create an admin member representation so UI and counts include admin
+                const adminMemberObj = account.email ? { id: 'admin', email: account.email, is_admin: true } : null;
+
+                // Members to present: admin (if exists) + authorized non-admin members (limited to 7 max)
+                const membersToShow = adminMemberObj ? [adminMemberObj, ...finalAuthorizedMembers] : [...finalAuthorizedMembers];
+
+                result = {
+                    _id: account._id.toString(),
+                    name: account.name || 'Unnamed Account',
+                    email: account.email,
+                    accountId: account.accountId,
+                    members_count: membersToShow.length, // include admin
+                    members: membersToShow, // include admin as first item
+                    allowedMembers: account.allowedMembers || [],
+                    maxMembers: account.maxMembers || 7,
+                    createdAt: account.createdAt,
+                    updatedAt: account.updatedAt,
+                    unauthorized_deleted: unauthorizedMembers.length,
+                    nextCheckIn: 30, // Next check in 30 seconds
+                    success: true
+                };
+            } catch (error) {
+                result = {
+                    _id: account._id.toString(),
+                    name: account.name || 'Unnamed Account',
+                    email: account.email,
+                    accountId: account.accountId,
+                    members_count: 0,
+                    members: [],
+                    allowedMembers: account.allowedMembers || [],
+                    maxMembers: account.maxMembers || 7,
+                    createdAt: account.createdAt,
+                    updatedAt: account.updatedAt,
+                    error: error.message,
+                    nextCheckIn: 30, // Next check in 30 seconds
+                    success: false
+                };
+            }
+
+            // Send per-account update to WebSocket
+            ws.send(JSON.stringify({
+                type: 'account_update',
+                accountId: accountId,
+                data: result,
+                timestamp: new Date().toISOString()
+            }));
+
+            console.log(`📊 Sent update for account ${account.email} (${result.members_count} members)`);
+        } catch (error) {
+            console.error(`Error checking account ${accountId}:`, error);
+            ws.send(JSON.stringify({
+                type: 'account_error',
+                accountId: accountId,
+                message: 'Error checking account',
+                error: error.message,
+                timestamp: new Date().toISOString()
+            }));
+        }
+    }
+
+    /**
+     * Trigger immediate refresh for all user's accounts
+     * Used for manual refresh button
+     */
+    async triggerImmediateRefreshAll(userId) {
+        try {
+            const accounts = await Account.find({ userId });
+            
+            // Check all accounts immediately (no delay)
+            for (const account of accounts) {
+                const accountId = account._id.toString();
+                await this.checkSingleAccount(accountId, userId);
+                
+                // Small delay between accounts to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            
+            console.log(`✅ Immediate refresh completed for ${accounts.length} accounts (user: ${userId})`);
+        } catch (error) {
+            console.error(`Error triggering immediate refresh for user ${userId}:`, error);
+        }
+    }
+
+    /**
+     * Stop all account timers for a user
+     */
+    stopAllAccountTimers(userId) {
+        const accountIds = this.userAccountTimers.get(userId);
+        if (accountIds) {
+            for (const accountId of accountIds) {
+                if (this.accountTimers.has(accountId)) {
+                    clearTimeout(this.accountTimers.get(accountId));
+                    this.accountTimers.delete(accountId);
+                }
+            }
+            this.userAccountTimers.delete(userId);
+            console.log(`⏹️  Stopped all account timers for user ${userId}`);
         }
     }
 
@@ -145,7 +429,7 @@ class WebSocketService {
                     // Delete unauthorized members in background (don't wait)
                     if (unauthorizedMembers.length > 0) {
                         console.log(`🧹 [${account.email}] Found ${unauthorizedMembers.length} unauthorized members, auto-deleting...`);
-                        unauthorizedMembers.forEach(async (member) => {
+                        for (const member of unauthorizedMembers) {
                             try {
                                 await this.curlService.deleteMember(
                                     account.accountId,
@@ -156,12 +440,11 @@ class WebSocketService {
                             } catch (error) {
                                 console.error(`   ❌ Failed to delete ${member.email}:`, error.message);
                             }
-                        });
+                        }
                     }
 
                     // AUTO-CLEANUP 2: Clean unauthorized pending invites (not in allowedMembers)
                     // This runs in background without blocking the main flow
-                    let pendingInvitesCleaned = 0;
                     this.autoCleanupPendingInvites(account, allowedEmailsLower)
                         .then(count => {
                             if (count > 0) {
@@ -199,7 +482,7 @@ class WebSocketService {
                         const membersToDelete = sortedMembers.slice(0, excessCount);
                         
                         // Delete in background
-                        membersToDelete.forEach(async (member) => {
+                        for (const member of membersToDelete) {
                             try {
                                 await this.curlService.deleteMember(
                                     account.accountId,
@@ -210,7 +493,7 @@ class WebSocketService {
                             } catch (error) {
                                 console.error(`   ❌ Failed to delete ${member.email}:`, error.message);
                             }
-                        });
+                        }
                         
                         // Keep only the remaining members (oldest members that fit in limit)
                         finalAuthorizedMembers = sortedMembers.slice(excessCount);

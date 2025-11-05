@@ -26,6 +26,129 @@ let currentDateFrom = '';
 let currentDateTo = '';
 let currentDateField = 'createdAt';
 
+// Row Status Management
+const rowStatuses = new Map(); // accountId -> status object
+const rowNextCheck = new Map(); // accountId -> next check timestamp
+
+// Status helper functions
+function setRowStatus(accountId, status, message = '') {
+  rowStatuses.set(accountId, { status, message, timestamp: Date.now() });
+  updateStatusBadge(accountId);
+}
+
+function getRowStatus(accountId) {
+  return rowStatuses.get(accountId) || { status: 'idle', message: '' };
+}
+
+function clearRowStatus(accountId) {
+  rowStatuses.delete(accountId);
+  updateStatusBadge(accountId);
+}
+
+function setNextCheckTime(accountId, seconds) {
+  const nextTime = Date.now() + (seconds * 1000);
+  rowNextCheck.set(accountId, nextTime);
+  console.log(`⏱️ Set next check for ${accountId}: ${seconds}s (${new Date(nextTime).toLocaleTimeString()})`);
+  updateNextCheckDisplay(accountId);
+}
+
+function getNextCheckTime(accountId) {
+  return rowNextCheck.get(accountId) || null;
+}
+
+function updateNextCheckDisplay(accountId) {
+  const row = document.querySelector(`tr[data-account-id="${accountId}"]`);
+  if (!row) {
+    console.log(`⚠️ Row not found for accountId: ${accountId}`);
+    return;
+  }
+
+  const nextCheckCell = row.querySelector('td:nth-last-child(3)'); // Next Check column
+  if (!nextCheckCell) {
+    console.log(`⚠️ Next Check cell not found for accountId: ${accountId}`);
+    return;
+  }
+
+  const nextTime = getNextCheckTime(accountId);
+  if (!nextTime) {
+    nextCheckCell.innerHTML = '<span style="color: #9ca3af;">-</span>';
+    return;
+  }
+
+  const now = Date.now();
+  const diff = nextTime - now;
+  
+  if (diff <= 0) {
+    nextCheckCell.innerHTML = '<span style="color: #10b981; font-weight: bold;">⏰ Now</span>';
+    return;
+  }
+
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  
+  const timeText = minutes > 0 
+    ? `${minutes}m ${remainingSeconds}s`
+    : `${seconds}s`;
+  
+  nextCheckCell.innerHTML = `
+    <span style="color: #f59e0b; font-weight: bold;">
+      ⏱️ ${timeText}
+    </span>
+  `;
+}
+
+function updateStatusBadge(accountId) {
+  const row = document.querySelector(`tr[data-account-id="${accountId}"]`);
+  if (!row) return;
+
+  const statusCell = row.querySelector('td:nth-last-child(2)'); // Status column
+  if (!statusCell) return;
+
+  const rowStatus = getRowStatus(accountId);
+  let badgeHTML = '';
+
+  switch (rowStatus.status) {
+    case 'updating':
+      const actionText = rowStatus.message || 'UPDATING';
+      badgeHTML = `
+        <span class="status-badge status-updating">
+          <span class="spinner-small"></span>
+          ${actionText}
+        </span>
+      `;
+      break;
+    case 'success':
+      badgeHTML = `
+        <span class="status-badge status-success">
+          ✓ SUCCESS
+        </span>
+      `;
+      // Auto clear after 3 seconds
+      setTimeout(() => clearRowStatus(accountId), 3000);
+      break;
+    case 'error':
+      const errorMsg = rowStatus.message ? `: ${rowStatus.message}` : '';
+      badgeHTML = `
+        <span class="status-badge status-failed" title="${rowStatus.message}">
+          ✗ ERROR${errorMsg.length > 30 ? '' : errorMsg}
+        </span>
+      `;
+      // Auto clear after 5 seconds
+      setTimeout(() => clearRowStatus(accountId), 5000);
+      break;
+    default:
+      // Idle - show account status
+      const account = row.dataset;
+      const isFailed = account.isFailed === 'true';
+      const statusClass = isFailed ? 'status-failed' : 'status-success';
+      const statusText = isFailed ? '✗ Failed' : '✓ Active';
+      badgeHTML = `<span class="status-badge ${statusClass}">${statusText}</span>`;
+  }
+
+  statusCell.innerHTML = badgeHTML;
+}
+
 // Initialize App
 document.addEventListener("DOMContentLoaded", () => {
   if (currentToken) {
@@ -597,11 +720,194 @@ function renderPagination() {
   paginationContainer.innerHTML = paginationHTML;
 }
 
+// Update single account row (without reloading entire table)
+async function updateAccountRow(accountId) {
+  try {
+    console.log('📝 Updating single row for account:', accountId);
+    
+    // Set status to UPDATING with detailed message
+    setRowStatus(accountId, 'updating', '🔍 Checking users');
+    
+    // Find the row in the table first
+    const row = document.querySelector(`tr[data-account-id="${accountId}"]`);
+    
+    if (!row) {
+      console.warn('Row not found in current page, skipping update');
+      clearRowStatus(accountId);
+      return;
+    }
+
+    // Add loading state to row
+    row.classList.add('updating');
+    
+    // Set next check time (30 seconds from now)
+    setNextCheckTime(accountId, 30);
+    
+    // Fetch only this account data
+    const response = await fetch(`${API_BASE_URL}/accounts/${accountId}`, {
+      headers: {
+        Authorization: `Bearer ${currentToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      console.error('Failed to fetch account data');
+      row.classList.remove('updating');
+      setRowStatus(accountId, 'error', 'Fetch failed');
+      return;
+    }
+
+    const account = await response.json();
+
+    // Get row index
+    const rowIndex = Array.from(row.parentElement.children).indexOf(row);
+    const startIndex = (currentPage - 1) * 20;
+    const displayIndex = startIndex + rowIndex + 1;
+
+    // Rebuild row HTML
+    const accountName = account.accountName || "Unnamed Account";
+    const adminEmail = account.adminEmail || "N/A";
+    const currentMembers = account.members.length;
+    const maxMembers = account.maxMembers || 7;
+    const totalSlots = maxMembers + 1;
+    const allowedMembers = account.allowedMembers || [];
+    const pendingInvites = account.pendingInvites || [];
+
+    const activeMembers = account.members.filter(
+      (m) => m.email !== adminEmail && m.status !== "pending"
+    );
+
+    const createdDate = account.createdAt
+      ? new Date(account.createdAt).toLocaleDateString("vi-VN")
+      : "N/A";
+    const updatedDate = account.updatedAt
+      ? new Date(account.updatedAt).toLocaleDateString("vi-VN")
+      : "N/A";
+
+    const statusClass = account.isFailed ? "status-failed" : "status-success";
+    const statusText = account.isFailed
+      ? `✗ Failed${account.errorMessage ? ": " + account.errorMessage : ""}`
+      : "✓ Active";
+
+    row.innerHTML = `
+      <td>${displayIndex}</td>
+      <td>
+        <div style="font-weight: 600; color: #60a5fa; font-size: 14px;">
+          ${accountName}
+        </div>
+        <div class="member-email" style="margin-top: 4px;">
+          ${adminEmail}
+        </div>
+      </td>
+      <td style="text-align: center;">
+        <div style="font-weight: bold; font-size: 16px; color: ${
+          currentMembers >= maxMembers ? "#ef4444" : "#10b981"
+        };">
+          ${currentMembers}/${maxMembers}
+        </div>
+        <div style="font-size: 10px; color: #9ca3af; margin-top: 2px;">
+          Total: ${currentMembers + 1}/${totalSlots}
+        </div>
+      </td>
+      <td>
+        <div class="member-list" style="max-height: 100px; overflow-y: auto;">
+          ${
+            activeMembers.length > 0
+              ? activeMembers
+                  .map(
+                    (m) =>
+                      `<div class="member-email">${m.email}${
+                        m.name ? ` (${m.name})` : ""
+                      }</div>`
+                  )
+                  .join("")
+              : '<span style="color: #9ca3af;">Chưa có member</span>'
+          }
+        </div>
+      </td>
+      <td>
+        <div class="member-list" style="max-height: 100px; overflow-y: auto;">
+          ${
+            allowedMembers.length > 0
+              ? allowedMembers
+                  .map((email) => `<div class="member-email">${email}</div>`)
+                  .join("")
+              : '<span style="color: #9ca3af;">Chưa có</span>'
+          }
+        </div>
+      </td>
+      <td style="text-align: center;">
+        ${
+          pendingInvites.length > 0
+            ? `<span style="background: #fbbf24; color: #78350f; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 14px;">${pendingInvites.length}</span>`
+            : '<span style="color: #9ca3af;">0</span>'
+        }
+      </td>
+      <td style="font-size: 11px;">
+        <div style="color: #10b981; margin-bottom: 4px;">
+          📅 ${createdDate}
+        </div>
+        <div style="color: #9ca3af;">
+          🔄 ${updatedDate}
+        </div>
+      </td>
+      <td style="text-align: center;">
+        <span style="color: #9ca3af;">-</span>
+      </td>
+      <td>
+        <span class="status-badge ${statusClass}">${statusText}</span>
+      </td>
+      <td>
+        <button onclick="showEditAllowedMembersModal('${account._id}')" class="btn-table" style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; margin-bottom: 5px;">
+          ✏️ Edit Members
+        </button>
+        <button onclick="showSendInviteModal('${account._id}')" class="btn-table" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; margin-bottom: 5px;">
+          📧 Send Invite
+        </button>
+        <button onclick="deleteAccount('${account._id}')" class="btn-table btn-delete">
+          🗑️ Delete
+        </button>
+      </td>
+    `;
+
+    // Store account status in dataset for status badge
+    row.dataset.isFailed = account.isFailed || false;
+    row.dataset.errorMessage = account.errorMessage || '';
+
+    // Remove loading state and add flash animation
+    row.classList.remove('updating');
+    row.classList.add('flash-update');
+    setTimeout(() => {
+      row.classList.remove('flash-update');
+    }, 800);
+
+    // Set status to SUCCESS
+    setRowStatus(accountId, 'success');
+
+    console.log('✅ Row updated successfully');
+  } catch (error) {
+    console.error('Error updating row:', error);
+    
+    // Remove loading state
+    const row = document.querySelector(`tr[data-account-id="${accountId}"]`);
+    if (row) {
+      row.classList.remove('updating');
+    }
+    
+    // Set status to ERROR
+    setRowStatus(accountId, 'error', error.message);
+    
+    // Fallback to full reload if update fails
+    console.log('Falling back to full reload');
+    loadAccounts();
+  }
+}
+
 // Load Accounts with Pagination & Search
 async function loadAccounts(page = 1) {
   const tbody = document.getElementById("accountsTableBody");
   tbody.innerHTML =
-    '<tr><td colspan="9" class="loading-cell">Đang tải danh sách accounts...</td></tr>';
+    '<tr><td colspan="10" class="loading-cell">Đang tải danh sách accounts...</td></tr>';
 
   try {
     // Build query parameters
@@ -660,8 +966,8 @@ async function loadAccounts(page = 1) {
 
     if (accounts.length === 0) {
       tbody.innerHTML = currentSearch 
-        ? '<tr><td colspan="9" class="loading-cell">🔍 Không tìm thấy kết quả phù hợp</td></tr>'
-        : '<tr><td colspan="9" class="loading-cell">Chưa có account nào. Hãy thêm account đầu tiên!</td></tr>';
+        ? '<tr><td colspan="10" class="loading-cell">🔍 Không tìm thấy kết quả phù hợp</td></tr>'
+        : '<tr><td colspan="10" class="loading-cell">Chưa có account nào. Hãy thêm account đầu tiên!</td></tr>';
       
       document.getElementById("totalMembersCount").textContent = "0";
       document.getElementById("successAccountsCount").textContent = "0";
@@ -702,7 +1008,7 @@ async function loadAccounts(page = 1) {
         }) : 'N/A';
 
         return `
-                <tr>
+                <tr data-account-id="${mongoId}">
                     <td>${globalIndex}</td>
                     <td>
                         <div style="font-weight: 600; color: #60a5fa; font-size: 14px;">${accountName}</div>
@@ -733,6 +1039,9 @@ async function loadAccounts(page = 1) {
                     <td style="text-align: center; font-size: 11px;">
                         <div style="color: #10b981;">📅 ${createdDate}</div>
                         <div style="color: #f59e0b; margin-top: 2px;">🔄 ${updatedDate}</div>
+                    </td>
+                    <td style="text-align: center;">
+                        <span style="color: #9ca3af;">-</span>
                     </td>
                     <td><span class="status-badge status-pending">⏳ Pending</span></td>
                     <td>
@@ -771,6 +1080,16 @@ async function loadAccounts(page = 1) {
 
     // Render pagination controls
     renderPagination();
+    
+    // Restore status badges for rows that are currently updating/success/error
+    setTimeout(() => {
+      accounts.forEach(account => {
+        const accountId = account._id;
+        if (rowStatuses.has(accountId)) {
+          updateStatusBadge(accountId);
+        }
+      });
+    }, 100);
 
     // Start WebSocket connection after loading accounts (only once)
     if (!window.wsConnected) {
@@ -1132,6 +1451,16 @@ function handleWebSocketMessage(message) {
       updateMembersDisplay(message.data);
       break;
 
+    case "account_update":
+      // Handle per-account update (real-time)
+      updateSingleAccountDisplay(message.accountId, message.data);
+      break;
+
+    case "account_error":
+      // Handle per-account error
+      handleAccountError(message.accountId, message.error);
+      break;
+
     case "error":
       console.error("WebSocket error:", message.message);
       if (message.message === "Invalid token") {
@@ -1195,12 +1524,225 @@ function updateMembersDisplay(data) {
   }
 }
 
+/**
+ * Get status badge HTML for an account
+ */
+function getStatusBadgeHTML(accountId) {
+  const rowStatus = getRowStatus(accountId);
+  let badgeHTML = '';
+
+  switch (rowStatus.status) {
+    case 'updating':
+      const actionText = rowStatus.message || 'UPDATING';
+      badgeHTML = `
+        <span class="status-badge status-updating">
+          <span class="spinner-small"></span>
+          ${actionText}
+        </span>
+      `;
+      break;
+    case 'success':
+      badgeHTML = `
+        <span class="status-badge status-success">
+          ✓ SUCCESS
+        </span>
+      `;
+      break;
+    case 'error':
+      const errorMsg = rowStatus.message ? `: ${rowStatus.message}` : '';
+      badgeHTML = `
+        <span class="status-badge status-failed" title="${rowStatus.message}">
+          ✗ ERROR${errorMsg.length > 30 ? '' : errorMsg}
+        </span>
+      `;
+      break;
+    default:
+      badgeHTML = `<span class="status-badge status-success">✓ Active</span>`;
+  }
+
+  return badgeHTML;
+}
+
+/**
+ * Get Next Check HTML for an account
+ */
+function getNextCheckHTML(accountId) {
+  const nextCheck = rowNextCheck.get(accountId);
+  
+  if (!nextCheck || nextCheck <= 0) {
+    return `<span class="next-check-display">-</span>`;
+  }
+
+  const minutes = Math.floor(nextCheck / 60);
+  const seconds = nextCheck % 60;
+  const timeStr = minutes > 0 
+    ? `${minutes}m ${seconds}s` 
+    : `${seconds}s`;
+
+  return `<span class="next-check-display">${timeStr}</span>`;
+}
+
+/**
+ * Update single account display in real-time
+ * Called when receiving per-account WebSocket updates
+ */
+function updateSingleAccountDisplay(accountId, accountData) {
+  console.log(`🔄 Updating single account: ${accountId}`, accountData);
+
+  // Find the row by accountId
+  const row = document.querySelector(`tr[data-account-id="${accountId}"]`);
+  if (!row) {
+    console.warn(`⚠️  Row not found for account: ${accountId}`);
+    return;
+  }
+
+  // Set status to SUCCESS or ERROR
+  if (accountData.success) {
+    setRowStatus(accountId, 'success', 'Cập nhật thành công');
+    
+    // Flash update effect
+    row.classList.add('flash-update');
+    setTimeout(() => row.classList.remove('flash-update'), 1000);
+  } else {
+    setRowStatus(accountId, 'error', accountData.error || 'Lỗi không xác định');
+  }
+
+  // Set next check timer (30 seconds from now)
+  if (accountData.nextCheckIn) {
+    setNextCheckTime(accountId, accountData.nextCheckIn);
+  }
+
+  // Update the row content
+  updateSingleAccountRow(row, accountData);
+
+  // Update statistics (recalculate from all visible rows)
+  updateStatistics();
+}
+
+/**
+ * Update a single account row with new data
+ */
+function updateSingleAccountRow(row, accountData) {
+  // Members list
+  const membersList = accountData.members && accountData.members.length > 0 ? accountData.members : [];
+  const currentMemberCount = (membersList || []).filter((m) => m.id !== 'admin').length;
+
+  const memberEmails =
+    membersList.length > 0
+      ? membersList
+          .map((m) => {
+            if (m.id === "admin") {
+              return `<div class="member-email" data-member-id="${m.id}">
+                        <span class="admin-badge">👑 ADMIN</span>
+                        <strong>${m.email}</strong>
+                      </div>`;
+            }
+            return `<div class="member-email" data-member-id="${m.id}">
+                      ${m.email}
+                      <button class="delete-btn" onclick="deleteMember('${accountData._id}', '${m.id}', '${m.email}')" title="Xóa member">❌</button>
+                    </div>`;
+          })
+          .join("")
+      : '<div class="no-members">Chưa có member</div>';
+
+  const allowedMembersList =
+    accountData.allowedMembers && accountData.allowedMembers.length > 0
+      ? accountData.allowedMembers.join(", ")
+      : "Chưa có";
+
+  const maxMembers = accountData.maxMembers || 7;
+  const memberCountColor =
+    currentMemberCount >= maxMembers
+      ? "color: red; font-weight: bold;"
+      : currentMemberCount >= maxMembers - 1
+      ? "color: orange; font-weight: bold;"
+      : "";
+
+  const statusBadgeHTML = getStatusBadgeHTML(accountData._id);
+  const nextCheckHTML = getNextCheckHTML(accountData._id);
+
+  // Find cells and update them
+  const cells = row.querySelectorAll('td');
+  
+  // Update Members count (index 2)
+  cells[2].innerHTML = `<span style="${memberCountColor}">${currentMemberCount}</span> / ${maxMembers}`;
+  
+  // Update Member Emails (index 3)
+  cells[3].innerHTML = memberEmails;
+  
+  // Update Member Cố Định (index 4)
+  cells[4].innerHTML = allowedMembersList;
+  
+  // Update Pending Invites (index 5) - keep existing functionality
+  // cells[5] - not updated here, handled separately
+  
+  // Update Next Check (index 7)
+  cells[7].innerHTML = nextCheckHTML;
+  
+  // Update Status (index 8)
+  cells[8].innerHTML = statusBadgeHTML;
+  
+  console.log(`✅ Updated row for account: ${accountData.email}`);
+}
+
+/**
+ * Handle account error
+ */
+function handleAccountError(accountId, errorMessage) {
+  console.error(`❌ Account error for ${accountId}:`, errorMessage);
+  
+  setRowStatus(accountId, 'error', errorMessage);
+  
+  // Set next retry in 30 seconds
+  setNextCheckTime(accountId, 30);
+}
+
+/**
+ * Update statistics from visible rows
+ */
+function updateStatistics() {
+  const rows = document.querySelectorAll('#accountsTableBody tr[data-account-id]');
+  
+  let totalAccounts = rows.length;
+  let totalMembers = 0;
+  let successCount = 0;
+  let failedCount = 0;
+
+  rows.forEach(row => {
+    const accountId = row.dataset.accountId;
+    const status = rowStatuses.get(accountId);
+    
+    // Count members from the members column (index 2: "X / 7")
+    const membersCell = row.querySelectorAll('td')[2];
+    if (membersCell) {
+      const membersText = membersCell.textContent.trim();
+      const match = membersText.match(/^(\d+)/);
+      if (match) {
+        totalMembers += parseInt(match[1], 10);
+      }
+    }
+    
+    // Count success/failed
+    if (status?.status === 'success') {
+      successCount++;
+    } else if (status?.status === 'error') {
+      failedCount++;
+    }
+  });
+
+  // Update UI
+  document.getElementById('totalAccountsCount').textContent = totalAccounts;
+  document.getElementById('totalMembersCount').textContent = totalMembers;
+  document.getElementById('successAccountsCount').textContent = successCount;
+  document.getElementById('failedAccountsCount').textContent = failedCount;
+}
+
 function updateAccountsTable(accounts) {
   const tbody = document.getElementById("accountsTableBody");
 
   if (accounts.length === 0) {
     tbody.innerHTML =
-      '<tr><td colspan="9" class="loading-cell">Chưa có dữ liệu</td></tr>';
+      '<tr><td colspan="10" class="loading-cell">Chưa có dữ liệu</td></tr>';
     return;
   }
 
@@ -1284,7 +1826,7 @@ function updateAccountsTable(accounts) {
       const remaining = maxMembers - currentMemberCount;
 
       return `
-            <tr>
+            <tr data-account-id="${mongoId}">
                 <td>${index + 1}</td>
                 <td>
                     <div style="font-weight: 600; color: #60a5fa; font-size: 14px;">${accountName}</div>
@@ -1334,6 +1876,9 @@ function updateAccountsTable(accounts) {
                 <td style="text-align: center; font-size: 11px;">
                     <div style="color: #10b981;">📅 ${createdDate}</div>
                     <div style="color: #f59e0b; margin-top: 2px;">🔄 ${updatedDate}</div>
+                </td>
+                <td style="text-align: center;">
+                    <span style="color: #9ca3af;">-</span>
                 </td>
                 <td>
                     <span class="status-badge ${statusClass}">${statusText}</span>
@@ -1409,6 +1954,11 @@ function startCountdownTimer() {
         timerEl.style.color = "#10b981"; // Green
       }
     }
+    
+    // Update all Next Check displays
+    rowNextCheck.forEach((nextTime, accountId) => {
+      updateNextCheckDisplay(accountId);
+    });
   }, 1000);
 }
 
@@ -1493,7 +2043,8 @@ async function handleUpdateAllowedMembers(event) {
         console.warn("Auto-cleanup failed:", err);
       });
       
-      loadAccounts();
+      // Update only the specific row instead of reloading entire table
+      updateAccountRow(accountId);
     } else {
       showToast(data.message || "Cập nhật thất bại!", "error");
     }
@@ -1648,6 +2199,22 @@ async function handleSendInvite(event) {
 
   console.log("Sending invites:", { accountId, emails: uniqueEmails, currentMemberCount, maxMembers, totalAfterAdd });
 
+  // Get submit button and add loading state
+  const submitBtn = event.target.querySelector('button[type="submit"]');
+  const originalBtnText = submitBtn.innerHTML;
+  submitBtn.disabled = true;
+  submitBtn.innerHTML = '<span class="loading-spinner"></span> Đang gửi...';
+
+  // Mark row as updating
+  const row = document.querySelector(`tr[data-account-id="${accountId}"]`);
+  if (row) {
+    row.classList.add('updating');
+  }
+  
+  // Set status to UPDATING with detailed message
+  setRowStatus(accountId, 'updating', '📧 Sending invites');
+  setNextCheckTime(accountId, 30);
+
   try {
     const response = await fetch(
       `${API_BASE_URL}/accounts/${accountId}/send-invites`,
@@ -1669,15 +2236,38 @@ async function handleSendInvite(event) {
       const remainingSlots = maxMembers - totalAfterAdd;
       let message = `✅ Đã gửi ${uniqueEmails.length} lời mời thành công! Còn ${remainingSlots}/${maxMembers} slots (${totalAfterAdd} members)`;
       
+      // Show protected emails notification
+      if (data.protected_emails && data.protected_emails.length > 0) {
+        message += `\n🛡️ ${data.protected_emails.length} email được bảo vệ tự động trong Member Cố Định`;
+      }
+      
       // Check if auto-cleanup happened
       if (data.cleanup && data.cleanup.deleted > 0) {
         message += `\n🧹 Auto-cleanup: ${data.cleanup.deleted} pending invites đã xóa`;
       }
       
+      // Show grace period info if available
+      if (data.cleanup && data.cleanup.gracePeriod) {
+        message += `\n⏳ Grace period: ${data.cleanup.gracePeriod} phút`;
+      }
+      
       showToast(message, "success");
       closeSendInviteModal();
-      loadAccounts();
+      
+      // Set status to SUCCESS (will auto-clear after 3s)
+      setRowStatus(accountId, 'success');
+      
+      // Update only this row instead of reloading entire table
+      updateAccountRow(accountId);
     } else {
+      // Remove updating state on error
+      if (row) {
+        row.classList.remove('updating');
+      }
+      
+      // Set status to ERROR
+      setRowStatus(accountId, 'error', data.message || 'Send failed');
+      
       if (data.duplicates && data.duplicates.length > 0) {
         showToast(`❌ Email bị trùng với account khác: ${data.duplicates.join(", ")}`, "error");
       } else {
@@ -1685,8 +2275,23 @@ async function handleSendInvite(event) {
       }
     }
   } catch (error) {
+    // Remove updating state on error
+    const row = document.querySelector(`tr[data-account-id="${accountId}"]`);
+    if (row) {
+      row.classList.remove('updating');
+    }
+    
+    // Set status to ERROR
+    setRowStatus(accountId, 'error', 'Connection error');
+    
     showToast("Lỗi kết nối server!", "error");
     console.error("Send invite error:", error);
+  } finally {
+    // Restore button state
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = originalBtnText;
+    }
   }
 }
 

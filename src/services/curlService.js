@@ -24,6 +24,44 @@ class CurlService {
         return this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
     }
 
+    // Hàm tạo headers ngẫu nhiên để tránh fingerprinting
+    getRandomizedHeaders(accessToken, userAgent) {
+        const chromeVersions = ['141', '140', '139', '142'];
+        const platforms = ['"Windows"', '"macOS"', '"Linux"'];
+        const platformVersions = ['"10.0.0"', '"13.0.0"', '"19.0.0"', '"15.0.0"'];
+        const architectures = ['"x86"', '"arm"'];
+        const bitness = ['"64"', '"32"'];
+        
+        const randomChromeVersion = chromeVersions[Math.floor(Math.random() * chromeVersions.length)];
+        const randomPlatform = platforms[Math.floor(Math.random() * platforms.length)];
+        const randomPlatformVersion = platformVersions[Math.floor(Math.random() * platformVersions.length)];
+        const randomArch = architectures[Math.floor(Math.random() * architectures.length)];
+        const randomBitness = bitness[Math.floor(Math.random() * bitness.length)];
+        
+        return {
+            "accept": "*/*",
+            "accept-language": "en-US,en;q=0.9,fr-FR;q=0.8,fr;q=0.7,vi;q=0.6",
+            "authorization": `Bearer ${accessToken}`,
+            "oai-client-version": "prod-9f5aa1f7b48d4577791d0e660bac1111ba132ee6",
+            "oai-language": "en-US",
+            "priority": "u=1, i",
+            "referer": "https://chatgpt.com/admin/members",
+            "sec-ch-ua": `"Google Chrome";v="${randomChromeVersion}", "Not?A_Brand";v="8", "Chromium";v="${randomChromeVersion}"`,
+            "sec-ch-ua-arch": randomArch,
+            "sec-ch-ua-bitness": randomBitness,
+            "sec-ch-ua-full-version": `"${randomChromeVersion}.0.7390.123"`,
+            "sec-ch-ua-full-version-list": `"Google Chrome";v="${randomChromeVersion}.0.7390.123", "Not?A_Brand";v="8.0.0.0", "Chromium";v="${randomChromeVersion}.0.7390.123"`,
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-model": '""',
+            "sec-ch-ua-platform": randomPlatform,
+            "sec-ch-ua-platform-version": randomPlatformVersion,
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "user-agent": userAgent
+        };
+    }
+
     // Hàm lấy account ID từ session API
     async getAccountIdFromSession(accessToken) {
         try {
@@ -76,33 +114,21 @@ class CurlService {
         
         const url = `${this.baseUrl}/${finalAccountId}/users?offset=0&limit=25&query=`;
         const userAgent = this.getRandomUserAgent(); // User-agent khác nhau cho mỗi request
-        const headers = {
-            "accept": "*/*",
-            "accept-language": "en-US,en;q=0.9,fr-FR;q=0.8,fr;q=0.7,vi;q=0.6",
-            "authorization": `Bearer ${accessToken}`,
-            "oai-client-version": "prod-9f5aa1f7b48d4577791d0e660bac1111ba132ee6",
-            "oai-language": "en-US",
-            "priority": "u=1, i",
-            "referer": "https://chatgpt.com/admin/members",
-            "sec-ch-ua": '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
-            "sec-ch-ua-arch": '"x86"',
-            "sec-ch-ua-bitness": '"64"',
-            "sec-ch-ua-full-version": '"141.0.7390.123"',
-            "sec-ch-ua-full-version-list": '"Google Chrome";v="141.0.7390.123", "Not?A_Brand";v="8.0.0.0", "Chromium";v="141.0.7390.123"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-model": '""',
-            "sec-ch-ua-platform": '"Windows"',
-            "sec-ch-ua-platform-version": '"19.0.0"',
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "same-origin",
-            "user-agent": userAgent, // Gán user-agent ngẫu nhiên
-            ...Object.fromEntries(Object.entries(additionalHeaders).filter(([key]) => !key.toLowerCase().includes('cookie') && key !== 'oai-device-id'))
+        const headers = this.getRandomizedHeaders(accessToken, userAgent);
+        
+        // Merge với additionalHeaders nếu có (loại bỏ cookie và oai-device-id)
+        const finalHeaders = {
+            ...headers,
+            ...Object.fromEntries(
+                Object.entries(additionalHeaders).filter(
+                    ([key]) => !key.toLowerCase().includes('cookie') && key !== 'oai-device-id'
+                )
+            )
         };
 
         const options = {
             method: 'GET',
-            headers: headers
+            headers: finalHeaders
         };
 
         // Retry logic (cơ bản, 3 lần nếu fail)
@@ -139,16 +165,46 @@ class CurlService {
 
     async executeMultipleCurls(accounts) {
         const results = [];
-        const promises = accounts.map(account =>
-            this.limit(() => this.executeCurl(account.id, account.accessToken, account.additionalHeaders || {}))
-                .then(result => results.push({ accountId: account.id, data: result }))
-                .catch(error => {
-                    console.error(`Failed for account ${account.id}:`, error);
-                    results.push({ accountId: account.id, error: error.message });
-                })
-        );
-
-        await Promise.all(promises); // Chạy tất cả với concurrency = 10
+        
+        console.log(`🔄 Processing ${accounts.length} accounts SEQUENTIALLY with random delays...`);
+        
+        // Chạy TUẦN TỰ (sequential) để tránh 403
+        for (let i = 0; i < accounts.length; i++) {
+            const account = accounts[i];
+            
+            try {
+                console.log(`\n[${i + 1}/${accounts.length}] Processing account ${account.id}...`);
+                
+                const result = await this.executeCurl(
+                    account.id, 
+                    account.accessToken, 
+                    account.additionalHeaders || {}
+                );
+                
+                results.push({ 
+                    accountId: account.id, 
+                    data: result 
+                });
+                
+                console.log(`✅ [${i + 1}/${accounts.length}] Success for ${account.id}`);
+                
+            } catch (error) {
+                console.error(`❌ [${i + 1}/${accounts.length}] Failed for account ${account.id}:`, error.message);
+                results.push({ 
+                    accountId: account.id, 
+                    error: error.message 
+                });
+            }
+            
+            // Random delay 15-30 giây giữa các request (trừ request cuối cùng)
+            if (i < accounts.length - 1) {
+                const delay = Math.floor(Math.random() * 15000) + 15000; // 15000-30000ms (15-30s)
+                console.log(`⏳ Waiting ${delay / 1000}s before next account...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+        
+        console.log(`\n✅ Completed processing ${accounts.length} accounts`);
         return results;
     }
 
