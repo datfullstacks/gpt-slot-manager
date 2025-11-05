@@ -112,10 +112,10 @@ class WebSocketService {
                 this.userAccountTimers.set(userId, new Set());
             }
 
-            // Stagger initial checks: Account 1 @ 0s, Account 2 @ 30s, Account 3 @ 60s, etc.
+            // Stagger initial checks: Account 1 @ 0s, Account 2 @ 5s, Account 3 @ 10s, etc.
             accounts.forEach((account, index) => {
                 const accountId = account._id.toString();
-                const delaySeconds = index * 30; // Stagger by 30 seconds
+                const delaySeconds = index * 5; // Stagger by 5 seconds (was 30s)
                 
                 console.log(`⏰ Scheduling account ${index + 1}/${accounts.length} (${account.email}) - first check in ${delaySeconds}s`);
                 
@@ -142,20 +142,26 @@ class WebSocketService {
         // Clear existing timer for this account
         if (this.accountTimers.has(accountId)) {
             clearTimeout(this.accountTimers.get(accountId));
+            console.log(`🔄 Cleared existing timer for account ${accountId.slice(-6)}`);
         }
 
         // Schedule new check
         const timeoutHandle = setTimeout(async () => {
+            console.log(`⏰ Timer fired for account ${accountId.slice(-6)} (userId: ${userId.slice(-6)})`);
             await this.checkSingleAccount(accountId, userId);
             
             // Schedule next check (30s from now) if client still connected
             const ws = this.clients.get(userId);
             if (ws && ws.readyState === 1) {
+                console.log(`♻️  Re-scheduling account ${accountId.slice(-6)} in 30s`);
                 this.scheduleAccountCheck(accountId, userId, 30);
+            } else {
+                console.log(`⚠️  Client disconnected, not re-scheduling ${accountId.slice(-6)}`);
             }
         }, delaySeconds * 1000);
 
         this.accountTimers.set(accountId, timeoutHandle);
+        console.log(`✅ Timer set for account ${accountId.slice(-6)} - will fire in ${delaySeconds}s`);
     }
 
     /**
@@ -166,16 +172,17 @@ class WebSocketService {
     async checkSingleAccount(accountId, userId) {
         const ws = this.clients.get(userId);
         if (!ws || ws.readyState !== 1) {
+            console.log(`⚠️  Client disconnected for account ${accountId.slice(-6)}, skipping check`);
             return;
         }
 
         try {
-            console.log(`🔍 Checking account: ${accountId}`);
+            console.log(`🔍 [START] Checking account: ${accountId.slice(-6)} (userId: ${userId.slice(-6)})`);
             
             // Get account from database
             const account = await Account.findById(accountId);
             if (!account) {
-                console.error(`Account not found: ${accountId}`);
+                console.error(`❌ Account not found: ${accountId}`);
                 return;
             }
 
@@ -323,9 +330,9 @@ class WebSocketService {
                 timestamp: new Date().toISOString()
             }));
 
-            console.log(`📊 Sent update for account ${account.email} (${result.members_count} members)`);
+            console.log(`✅ [END] Sent update for account ${account.email} (${result.members_count} members)`);
         } catch (error) {
-            console.error(`Error checking account ${accountId}:`, error);
+            console.error(`❌ [ERROR] Error checking account ${accountId.slice(-6)}:`, error);
             ws.send(JSON.stringify({
                 type: 'account_error',
                 accountId: accountId,

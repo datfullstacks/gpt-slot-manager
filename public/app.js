@@ -976,7 +976,7 @@ async function loadAccounts(page = 1) {
       return;
     }
 
-    // Display accounts with pending status initially
+    // Display accounts with data from database
     tbody.innerHTML = accounts
       .map((account, index) => {
         const allowedMembersDisplay =
@@ -1007,6 +1007,25 @@ async function loadAccounts(page = 1) {
           year: 'numeric'
         }) : 'N/A';
 
+        // Get member count and status from database
+        const memberCount = account.members?.length || 0;
+        const memberDisplay = memberCount > 0 
+          ? `<span style="color: #10b981; font-weight: bold;">${memberCount}/${maxMembers}</span>`
+          : `<span style="color: #9ca3af;">0/${maxMembers}</span>`;
+        
+        // Show member emails or "No data"
+        const membersEmailDisplay = account.members && account.members.length > 0
+          ? account.members.map(m => `<span class="member-email">${m.email}</span>`).join('')
+          : '<span style="color: #9ca3af;">Chưa có dữ liệu</span>';
+        
+        // Determine initial status
+        let statusBadge = '<span class="status-badge status-idle">⚪ Idle</span>';
+        if (account.isFailed) {
+          statusBadge = '<span class="status-badge status-error">❌ Error</span>';
+        } else if (memberCount > 0) {
+          statusBadge = '<span class="status-badge status-success">✅ Success</span>';
+        }
+
         return `
                 <tr data-account-id="${mongoId}">
                     <td>${globalIndex}</td>
@@ -1014,8 +1033,10 @@ async function loadAccounts(page = 1) {
                         <div style="font-weight: 600; color: #60a5fa; font-size: 14px;">${accountName}</div>
                         <div style="font-size: 11px; color: #9ca3af; margin-top: 2px;">${accountEmail}</div>
                     </td>
-                    <td style="text-align: center;">-</td>
-                    <td><span style="color: #9ca3af;">Đang chờ cập nhật...</span></td>
+                    <td style="text-align: center;">${memberDisplay}</td>
+                    <td>
+                        <div class="member-list">${membersEmailDisplay}</div>
+                    </td>
                     <td>
                         <div class="member-list">${allowedMembersDisplay}</div>
                         <button id="${buttonId}"
@@ -1043,7 +1064,7 @@ async function loadAccounts(page = 1) {
                     <td style="text-align: center;">
                         <span style="color: #9ca3af;">-</span>
                     </td>
-                    <td><span class="status-badge status-pending">⏳ Pending</span></td>
+                    <td>${statusBadge}</td>
                     <td>
                         <button onclick="showSendInviteModal('${mongoId}', '${accountEmail}', 0, ${maxMembers})" class="btn-table" 
                                 style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; margin-right: 5px;"
@@ -1080,6 +1101,15 @@ async function loadAccounts(page = 1) {
 
     // Render pagination controls
     renderPagination();
+    
+    // Calculate stats from loaded accounts
+    const totalMembers = accounts.reduce((sum, acc) => sum + (acc.members?.length || 0), 0);
+    const successAccounts = accounts.filter(acc => acc.members && acc.members.length > 0 && !acc.isFailed).length;
+    const failedAccounts = accounts.filter(acc => acc.isFailed).length;
+    
+    document.getElementById("totalMembersCount").textContent = totalMembers;
+    document.getElementById("successAccountsCount").textContent = successAccounts;
+    document.getElementById("failedAccountsCount").textContent = failedAccounts;
     
     // Restore status badges for rows that are currently updating/success/error
     setTimeout(() => {

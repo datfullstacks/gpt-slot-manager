@@ -14,7 +14,6 @@ router.use(codeVerificationMiddleware);
 // So these paths are relative to /api/accounts
 router.post('/', accountsController.createAccount.bind(accountsController));
 router.get('/', accountsController.getAccounts.bind(accountsController));
-router.get('/:id', accountsController.getAccountById.bind(accountsController)); // NEW: Get single account
 router.post('/process', accountsController.processAccounts.bind(accountsController));
 router.put('/:id/allowed-members', accountsController.updateAllowedMembers.bind(accountsController));
 router.post('/:id/send-invites', accountsController.sendInvites.bind(accountsController));

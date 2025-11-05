@@ -8,7 +8,6 @@ import { fileURLToPath } from "url";
 import connectDB from "./config/database.js";
 import accountsRoutes from "./routes/accounts.js";
 import authRoutes from "./routes/auth.js";
-import accessCodeRoutes from "./routes/accessCodes.js";
 import WebSocketService from "./services/websocketService.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -42,11 +41,9 @@ app.use(express.static(path.resolve(__dirname, "../public")));
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/accounts", accountsRoutes);
-app.use("/api/access-codes", accessCodeRoutes);
 console.log("Routes loaded:");
 console.log("  - /api/auth (register, login, profile)");
 console.log("  - /api/accounts (CRUD + process)");
-console.log("  - /api/access-codes (verify, status)");
 
 // Serve index.html for root path
 app.get("/", (req, res) => {

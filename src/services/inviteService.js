@@ -3,23 +3,10 @@ import fetch from 'node-fetch';
 class InviteService {
     constructor() {
         this.baseUrl = 'https://chatgpt.com/backend-api/accounts';
-        this.userAgents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
-        ];
-    }
-
-    getRandomUserAgent() {
-        return this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
     }
 
     async sendInvites(accountId, accessToken, emailAddresses, resendEmails = true) {
         const url = `${this.baseUrl}/${accountId}/invites`;
-        
-        // Random user agent per request
-        const userAgent = this.getRandomUserAgent();
         
         // Standard headers based on your curl
         const headers = {
@@ -33,7 +20,7 @@ class InviteService {
             'sec-fetch-dest': 'empty',
             'sec-fetch-mode': 'cors',
             'sec-fetch-site': 'same-origin',
-            'user-agent': userAgent
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
         };
 
         const payload = {
@@ -71,77 +58,57 @@ class InviteService {
         }
     }
 
-    async sendInvitesToMultipleAccounts(accounts) {
-        const results = [];
-        
-        console.log(`🔄 Sending invites to ${accounts.length} accounts SEQUENTIALLY...`);
-        
-        // Chạy TUẦN TỰ để tránh 403
-        for (let i = 0; i < accounts.length; i++) {
-            const account = accounts[i];
-            
-            try {
-                console.log(`\n[${i + 1}/${accounts.length}] Processing account ${account.email}...`);
-                
-                // Filter emails: only send to allowed members
-                const emailsToInvite = account.allowedMembers || [];
-                
-                if (emailsToInvite.length === 0) {
-                    results.push({
+    async sendInvitesToMultipleAccounts(accounts, maxConcurrent = 5) {
+        const pLimit = (await import('p-limit')).default;
+        const limit = pLimit(maxConcurrent);
+
+        const tasks = accounts.map(account => 
+            limit(async () => {
+                try {
+                    // Filter emails: only send to allowed members
+                    const emailsToInvite = account.allowedMembers || [];
+                    
+                    if (emailsToInvite.length === 0) {
+                        return {
+                            email: account.email,
+                            accountId: account.accountId,
+                            success: false,
+                            error: 'No allowed members to invite',
+                            invited_count: 0
+                        };
+                    }
+
+                    const result = await this.sendInvites(
+                        account.accountId,
+                        account.accessToken,
+                        emailsToInvite,
+                        true
+                    );
+
+                    return {
+                        email: account.email,
+                        accountId: account.accountId,
+                        success: true,
+                        invited_count: result.invited_count,
+                        data: result.data
+                    };
+                } catch (error) {
+                    return {
                         email: account.email,
                         accountId: account.accountId,
                         success: false,
-                        error: 'No allowed members to invite',
+                        error: error.message,
                         invited_count: 0
-                    });
-                    console.log(`⚠️  No allowed members for ${account.email}`);
-                    continue;
+                    };
                 }
+            })
+        );
 
-                const result = await this.sendInvites(
-                    account.accountId,
-                    account.accessToken,
-                    emailsToInvite,
-                    true
-                );
-
-                results.push({
-                    email: account.email,
-                    accountId: account.accountId,
-                    success: true,
-                    invited_count: result.invited_count,
-                    data: result.data
-                });
-                
-                console.log(`✅ [${i + 1}/${accounts.length}] Sent ${result.invited_count} invites for ${account.email}`);
-                
-            } catch (error) {
-                console.error(`❌ [${i + 1}/${accounts.length}] Failed for ${account.email}:`, error.message);
-                results.push({
-                    email: account.email,
-                    accountId: account.accountId,
-                    success: false,
-                    error: error.message,
-                    invited_count: 0
-                });
-            }
-            
-            // Random delay 15-30 giây giữa các account (trừ account cuối cùng)
-            if (i < accounts.length - 1) {
-                const delay = Math.floor(Math.random() * 15000) + 15000; // 15000-30000ms (15-30s)
-                console.log(`⏳ Waiting ${delay / 1000}s before next account...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        }
-
-        console.log(`\n✅ Completed sending invites to ${accounts.length} accounts`);
-        return results;
+        return Promise.all(tasks);
     }
 
     async getPendingInvites(accountId, accessToken, offset = 0, limit = 100) {
         const url = `${this.baseUrl}/${accountId}/invites?offset=${offset}&limit=${limit}&query=`;
-        
-        const userAgent = this.getRandomUserAgent();
         
         const headers = {
             'accept': '*/*',
@@ -153,7 +120,7 @@ class InviteService {
             'sec-fetch-dest': 'empty',
             'sec-fetch-mode': 'cors',
             'sec-fetch-site': 'same-origin',
-            'user-agent': userAgent
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
         };
 
         console.log(`📋 Fetching pending invites for account ${accountId}...`);
@@ -187,8 +154,6 @@ class InviteService {
     async deletePendingInvite(accountId, accessToken, emailAddress) {
         const url = `${this.baseUrl}/${accountId}/invites`;
         
-        const userAgent = this.getRandomUserAgent();
-        
         const headers = {
             'accept': '*/*',
             'accept-language': 'en-US,en;q=0.9',
@@ -200,7 +165,7 @@ class InviteService {
             'sec-fetch-dest': 'empty',
             'sec-fetch-mode': 'cors',
             'sec-fetch-site': 'same-origin',
-            'user-agent': userAgent
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
         };
 
         const payload = {
@@ -234,7 +199,7 @@ class InviteService {
         }
     }
 
-    async cleanupPendingInvites(accountId, accessToken, allowedMembers = [], gracePeriodMinutes = 5) {
+    async cleanupPendingInvites(accountId, accessToken, allowedMembers = []) {
         try {
             // Get all pending invites
             const pendingResult = await this.getPendingInvites(accountId, accessToken);
@@ -248,41 +213,18 @@ class InviteService {
                 };
             }
 
-            // Get current time
-            const now = new Date();
-            const gracePeriodMs = gracePeriodMinutes * 60 * 1000;
-
-            // Filter invites that are NOT in allowedMembers AND past grace period
+            // Filter invites that are NOT in allowedMembers
             const unauthorizedInvites = pendingResult.invites.filter(invite => {
                 const inviteEmail = (invite.email_address || invite.email)?.toLowerCase();
-                
-                // Check if in allowedMembers
-                const isAllowed = allowedMembers.some(allowed => allowed.toLowerCase() === inviteEmail);
-                if (isAllowed) {
-                    return false; // Keep it
-                }
-
-                // Check grace period (if invite has timestamp)
-                if (invite.created_at || invite.invited_at) {
-                    const inviteTime = new Date(invite.created_at || invite.invited_at);
-                    const age = now - inviteTime;
-                    
-                    if (age < gracePeriodMs) {
-                        console.log(`⏳ Skipping ${inviteEmail} - within grace period (${Math.round(age/1000)}s old)`);
-                        return false; // Keep it - too new
-                    }
-                }
-
-                // Not in allowedMembers and past grace period (or no timestamp) - delete it
-                return true;
+                return !allowedMembers.some(allowed => allowed.toLowerCase() === inviteEmail);
             });
 
-            console.log(`🧹 Found ${unauthorizedInvites.length} unauthorized pending invites to cleanup (${pendingResult.invites.length} total)`);
+            console.log(`🧹 Found ${unauthorizedInvites.length} unauthorized pending invites to cleanup`);
 
             if (unauthorizedInvites.length === 0) {
                 return {
                     success: true,
-                    message: 'All pending invites are authorized or within grace period',
+                    message: 'All pending invites are authorized',
                     deleted: [],
                     failed: []
                 };
@@ -311,8 +253,7 @@ class InviteService {
                 success: true,
                 message: `Cleanup completed: ${deleted.length} deleted, ${failed.length} failed`,
                 deleted,
-                failed,
-                gracePeriod: `${gracePeriodMinutes} minutes`
+                failed
             };
         } catch (error) {
             console.error('Error during cleanup:', error);

@@ -17,12 +17,6 @@ export const authMiddleware = (req, res, next) => {
         req.userId = decoded.userId;
         req.username = decoded.username;
         
-        // For compatibility with accessCodeController (expects req.user._id)
-        req.user = {
-            _id: decoded.userId,
-            username: decoded.username
-        };
-        
         next();
     } catch (error) {
         if (error.name === 'JsonWebTokenError') {
@@ -34,5 +28,3 @@ export const authMiddleware = (req, res, next) => {
         return res.status(500).json({ message: 'Auth error', error: error.message });
     }
 };
-
-export default authMiddleware;
