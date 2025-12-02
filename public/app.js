@@ -976,7 +976,7 @@ async function loadAccounts(page = 1) {
       return;
     }
 
-    // Display accounts with data from database
+    // Display accounts with pending status initially
     tbody.innerHTML = accounts
       .map((account, index) => {
         const allowedMembersDisplay =
@@ -1007,25 +1007,6 @@ async function loadAccounts(page = 1) {
           year: 'numeric'
         }) : 'N/A';
 
-        // Get member count and status from database
-        const memberCount = account.members?.length || 0;
-        const memberDisplay = memberCount > 0 
-          ? `<span style="color: #10b981; font-weight: bold;">${memberCount}/${maxMembers}</span>`
-          : `<span style="color: #9ca3af;">0/${maxMembers}</span>`;
-        
-        // Show member emails or "No data"
-        const membersEmailDisplay = account.members && account.members.length > 0
-          ? account.members.map(m => `<span class="member-email">${m.email}</span>`).join('')
-          : '<span style="color: #9ca3af;">Chưa có dữ liệu</span>';
-        
-        // Determine initial status
-        let statusBadge = '<span class="status-badge status-idle">⚪ Idle</span>';
-        if (account.isFailed) {
-          statusBadge = '<span class="status-badge status-error">❌ Error</span>';
-        } else if (memberCount > 0) {
-          statusBadge = '<span class="status-badge status-success">✅ Success</span>';
-        }
-
         return `
                 <tr data-account-id="${mongoId}">
                     <td>${globalIndex}</td>
@@ -1033,10 +1014,8 @@ async function loadAccounts(page = 1) {
                         <div style="font-weight: 600; color: #60a5fa; font-size: 14px;">${accountName}</div>
                         <div style="font-size: 11px; color: #9ca3af; margin-top: 2px;">${accountEmail}</div>
                     </td>
-                    <td style="text-align: center;">${memberDisplay}</td>
-                    <td>
-                        <div class="member-list">${membersEmailDisplay}</div>
-                    </td>
+                    <td style="text-align: center;">-</td>
+                    <td><span style="color: #9ca3af;">Đang chờ cập nhật...</span></td>
                     <td>
                         <div class="member-list">${allowedMembersDisplay}</div>
                         <button id="${buttonId}"
@@ -1064,7 +1043,7 @@ async function loadAccounts(page = 1) {
                     <td style="text-align: center;">
                         <span style="color: #9ca3af;">-</span>
                     </td>
-                    <td>${statusBadge}</td>
+                    <td><span class="status-badge status-pending">⏳ Pending</span></td>
                     <td>
                         <button onclick="showSendInviteModal('${mongoId}', '${accountEmail}', 0, ${maxMembers})" class="btn-table" 
                                 style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; margin-right: 5px;"
@@ -1101,15 +1080,6 @@ async function loadAccounts(page = 1) {
 
     // Render pagination controls
     renderPagination();
-    
-    // Calculate stats from loaded accounts
-    const totalMembers = accounts.reduce((sum, acc) => sum + (acc.members?.length || 0), 0);
-    const successAccounts = accounts.filter(acc => acc.members && acc.members.length > 0 && !acc.isFailed).length;
-    const failedAccounts = accounts.filter(acc => acc.isFailed).length;
-    
-    document.getElementById("totalMembersCount").textContent = totalMembers;
-    document.getElementById("successAccountsCount").textContent = successAccounts;
-    document.getElementById("failedAccountsCount").textContent = failedAccounts;
     
     // Restore status badges for rows that are currently updating/success/error
     setTimeout(() => {
@@ -2439,18 +2409,82 @@ async function viewPendingInvites(accountId) {
       return;
     }
 
-    // Show modal with pending invites
-    const invitesList = data.invites.map((invite, index) => {
+    // Show modal with pending invites and resend buttons
+    console.log('📋 Pending invites data:', data.invites);
+    const invitesHtml = data.invites.map((invite, index) => {
       const email = invite.email_address || invite.email || 'N/A';
       const createdTime = invite.created_time ? new Date(invite.created_time).toLocaleString('vi-VN') : 'N/A';
-      return `${index + 1}. ${email}\n   Role: ${invite.role || 'standard-user'}\n   Created: ${createdTime}`;
-    }).join('\n\n');
+      console.log(`  ${index + 1}. Email: ${email}, AccountId: ${accountId}`);
+      return `
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #e5e7eb;">
+          <div>
+            <div style="font-weight: 600; color: #1f2937;">${index + 1}. ${email}</div>
+            <div style="font-size: 12px; color: #6b7280;">Role: ${invite.role || 'standard-user'} | Created: ${createdTime}</div>
+          </div>
+          <button onclick="resendInvite('${accountId}', '${email}')" 
+                  class="btn-table" 
+                  style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; padding: 6px 12px; margin-left: 10px;">
+            🔄 Resend
+          </button>
+        </div>
+      `;
+    }).join('');
 
-    alert(`📧 Pending Invites cho ${data.account.name || data.account.email}:\n\nTổng số: ${data.total}\n\n${invitesList}`);
+    const modalHtml = `
+      <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 10000;" id="pendingInvitesModal">
+        <div style="background: white; border-radius: 12px; padding: 24px; max-width: 600px; max-height: 80vh; overflow-y: auto; box-shadow: 0 20px 50px rgba(0,0,0,0.3);">
+          <h3 style="margin: 0 0 16px 0; color: #1f2937;">📧 Pending Invites - ${data.account.name || data.account.email}</h3>
+          <p style="color: #6b7280; margin-bottom: 16px;">Tổng số: ${data.total}</p>
+          <div style="max-height: 400px; overflow-y: auto;">
+            ${invitesHtml}
+          </div>
+          <button onclick="document.getElementById('pendingInvitesModal').remove()" 
+                  style="margin-top: 16px; width: 100%; padding: 10px; background: #6b7280; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            Đóng
+          </button>
+        </div>
+      </div>
+    `;
+
+    // Remove existing modal if any
+    const existingModal = document.getElementById('pendingInvitesModal');
+    if (existingModal) existingModal.remove();
+
+    // Add new modal
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    
     showToast(`✅ Tìm thấy ${data.total} pending invites`, "success");
   } catch (error) {
     showToast("Lỗi kết nối server!", "error");
     console.error("View pending invites error:", error);
+  }
+}
+
+// Resend invite to a specific email
+async function resendInvite(accountId, email) {
+  try {
+    showToast(`📧 Đang gửi lại invite cho ${email}...`, "info");
+
+    const response = await fetch(`${API_BASE_URL}/accounts/${accountId}/resend-invite`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${currentToken}`,
+      },
+      body: JSON.stringify({ email }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      showToast(data.message || "Gửi lại invite thất bại!", "error");
+      return;
+    }
+
+    showToast(`✅ Đã gửi lại invite cho ${email}!`, "success");
+  } catch (error) {
+    showToast("Lỗi kết nối server!", "error");
+    console.error("Resend invite error:", error);
   }
 }
 

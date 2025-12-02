@@ -25,6 +25,7 @@ router.post('/auto-cleanup-all', accountsController.autoCleanupAllAccounts.bind(
 router.get('/:id/pending-invites', accountsController.getPendingInvites.bind(accountsController));
 router.post('/:id/cleanup-pending-invites', accountsController.cleanupPendingInvites.bind(accountsController));
 router.post('/cleanup-all-pending-invites', accountsController.cleanupAllPendingInvites.bind(accountsController));
+router.post('/:id/resend-invite', accountsController.resendInvite.bind(accountsController));
 
 router.delete('/:accountId/members/:userId', accountsController.deleteMember.bind(accountsController));
 router.delete('/:id', accountsController.deleteAccount.bind(accountsController));

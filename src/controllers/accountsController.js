@@ -895,6 +895,55 @@ class AccountsController {
       });
     }
   }
+
+  // Resend invite for a specific email
+  async resendInvite(req, res) {
+    try {
+      const { id } = req.params;
+      const { email } = req.body;
+      const userId = req.userId;
+
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email is required'
+        });
+      }
+
+      // Get account from database
+      const account = await Account.findOne({ _id: id, userId });
+
+      if (!account) {
+        return res.status(404).json({
+          success: false,
+          message: 'Account not found'
+        });
+      }
+
+      console.log(`📧 Resending invite to ${email} for account ${account.email}`);
+
+      // Use InviteService to resend invite
+      const result = await this.inviteService.sendInvites(
+        account.accountId,
+        account.accessToken,
+        [email],
+        true // resend_emails = true
+      );
+
+      res.status(200).json({
+        success: true,
+        message: `Invite resent to ${email}`,
+        data: result
+      });
+    } catch (error) {
+      console.error("Error resending invite:", error);
+      res.status(500).json({
+        success: false,
+        message: "Error resending invite",
+        error: error.message
+      });
+    }
+  }
 }
 
 export default AccountsController;
