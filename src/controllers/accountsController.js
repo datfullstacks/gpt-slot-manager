@@ -360,29 +360,65 @@ class AccountsController {
         }
       }
 
-      // ✅ FIRST: Add emails to allowedMembers to prevent cleanup
-      // This ensures that even if cleanup runs during invite sending,
-      // the emails are already "protected"
-      if (emailsToInvite.length > 0 && !account.allowedMembers.some(e => emailsToInvite.includes(e))) {
-        console.log(`🔒 Adding ${emailsToInvite.length} emails to allowedMembers BEFORE sending invites...`);
-        account.allowedMembers = [...new Set([...account.allowedMembers, ...emailsToInvite])];
-        await account.save();
-        console.log(`✅ Protected emails saved to allowedMembers`);
+      // ✅ Send invites to ChatGPT API FIRST
+      console.log(`📧 Sending invites to ChatGPT API for ${emailsToInvite.length} email(s)...`);
+      
+      let result;
+      try {
+        result = await this.inviteService.sendInvites(
+          account.accountId,
+          account.accessToken,
+          emailsToInvite,
+          true
+        );
+        console.log(`✅ ChatGPT API accepted invites successfully`);
+      } catch (inviteError) {
+        // ❌ If invite fails, DO NOT save to DB
+        console.error(`❌ Failed to send invites to ChatGPT:`, inviteError.message);
+        
+        // Rollback: Remove emails from allowedMembers if they were added
+        const emailsToRemove = emailsToInvite.filter(e => 
+          !currentAllowedMembers.includes(e)
+        );
+        
+        if (emailsToRemove.length > 0) {
+          account.allowedMembers = account.allowedMembers.filter(
+            e => !emailsToRemove.includes(e)
+          );
+          await account.save();
+          console.log(`🔄 Rolled back ${emailsToRemove.length} emails from allowedMembers`);
+        }
+        
+        // Return specific error
+        if (inviteError.message.includes('403')) {
+          return res.status(403).json({
+            message: "Access forbidden. Please check your access token.",
+            error: inviteError.message
+          });
+        } else if (inviteError.message.includes('429')) {
+          return res.status(429).json({
+            message: "Rate limit exceeded. Please try again later.",
+            error: inviteError.message
+          });
+        } else {
+          return res.status(500).json({
+            message: "Failed to send invites to ChatGPT",
+            error: inviteError.message
+          });
+        }
       }
 
-      // Send invites
-      const result = await this.inviteService.sendInvites(
-        account.accountId,
-        account.accessToken,
-        emailsToInvite,
-        true
+      // ✅ ONLY save to DB if ChatGPT API succeeded
+      const newEmailsToAdd = emailsToInvite.filter(e => 
+        !currentAllowedMembers.includes(e)
       );
-
-      // ⏳ Wait a bit to ensure MongoDB and ChatGPT have updated
-      // This prevents race condition with auto-cleanup
-      await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay
-
-      console.log(`✅ Invites sent and delay completed. Emails are now safe from cleanup.`);
+      
+      if (newEmailsToAdd.length > 0) {
+        console.log(`💾 Saving ${newEmailsToAdd.length} emails to allowedMembers...`);
+        account.allowedMembers = [...new Set([...account.allowedMembers, ...newEmailsToAdd])];
+        await account.save();
+        console.log(`✅ Emails saved to database`);
+      }
 
       res.status(200).json({
         message: "Invites sent successfully",
@@ -940,6 +976,78 @@ class AccountsController {
       res.status(500).json({
         success: false,
         message: "Error resending invite",
+        error: error.message
+      });
+    }
+  }
+
+  // Verify pending invites - sync DB with actual ChatGPT data
+  async verifyPendingInvites(req, res) {
+    try {
+      const { id } = req.params;
+      const userId = req.userId;
+
+      const account = await Account.findOne({ _id: id, userId });
+
+      if (!account) {
+        return res.status(404).json({
+          success: false,
+          message: 'Account not found'
+        });
+      }
+
+      console.log(`🔍 Verifying pending invites for account ${account.email}...`);
+
+      // Fetch actual pending invites from ChatGPT
+      const result = await this.inviteService.getPendingInvites(
+        account.accountId,
+        account.accessToken
+      );
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to fetch pending invites from ChatGPT'
+        });
+      }
+
+      const actualPendingEmails = result.invites.map(inv => inv.email_address || inv.email);
+      const dbAllowedEmails = account.allowedMembers || [];
+
+      // Find emails that are NOT in pending anymore (might be accepted or rejected)
+      const notPendingAnymore = dbAllowedEmails.filter(
+        email => !actualPendingEmails.includes(email)
+      );
+
+      // Find emails in pending but NOT in allowedMembers (orphan invites)
+      const orphanInvites = actualPendingEmails.filter(
+        email => !dbAllowedEmails.includes(email)
+      );
+
+      console.log(`📊 Verification results:
+        - Actual pending: ${actualPendingEmails.length}
+        - DB allowed members: ${dbAllowedEmails.length}
+        - Not pending anymore: ${notPendingAnymore.length}
+        - Orphan invites: ${orphanInvites.length}
+      `);
+
+      res.status(200).json({
+        success: true,
+        message: `Verified pending invites for ${account.email}`,
+        data: {
+          actualPending: actualPendingEmails,
+          actualPendingCount: actualPendingEmails.length,
+          dbAllowedMembers: dbAllowedEmails,
+          notPendingAnymore: notPendingAnymore,
+          orphanInvites: orphanInvites,
+          syncStatus: orphanInvites.length === 0 && notPendingAnymore.length === 0 ? 'synced' : 'out-of-sync'
+        }
+      });
+    } catch (error) {
+      console.error("Error verifying pending invites:", error);
+      res.status(500).json({
+        success: false,
+        message: "Error verifying pending invites",
         error: error.message
       });
     }

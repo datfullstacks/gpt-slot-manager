@@ -23,6 +23,7 @@ router.post('/auto-cleanup-all', accountsController.autoCleanupAllAccounts.bind(
 
 // Pending invites routes
 router.get('/:id/pending-invites', accountsController.getPendingInvites.bind(accountsController));
+router.get('/:id/verify-pending-invites', accountsController.verifyPendingInvites.bind(accountsController));
 router.post('/:id/cleanup-pending-invites', accountsController.cleanupPendingInvites.bind(accountsController));
 router.post('/cleanup-all-pending-invites', accountsController.cleanupAllPendingInvites.bind(accountsController));
 router.post('/:id/resend-invite', accountsController.resendInvite.bind(accountsController));
