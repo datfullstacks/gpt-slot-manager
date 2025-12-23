@@ -54,3 +54,13 @@ temp/
 
 # Documentation files
 *.md
+# Admin scripts (dev only)
+reset-password.js
+list-users.js
+set-admin-role.js
+test-*.ps1
+test-*.js
+
+# Postman collections (dev only)
+postman-collection.json
+postman-environment.json

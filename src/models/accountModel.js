@@ -38,7 +38,25 @@ const accountSchema = new mongoose.Schema({
     maxMembers: {
         type: Number,
         default: 7, // Default ChatGPT Business limit
-        min: 1,
+    },
+    // Session tracking
+    sessionStatus: {
+        type: String,
+        enum: ['active', 'expired', 'error'],
+        default: 'active'
+    },
+    lastError: {
+        type: String,
+        default: null
+    },
+    lastErrorTime: {
+        type: Date,
+        default: null
+    },
+    errorCount: {
+        type: Number,
+        default: 0,
+        min: 0,
         max: 100
     },
     createdAt: {

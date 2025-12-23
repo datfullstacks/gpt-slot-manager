@@ -21,6 +21,11 @@ const userSchema = new mongoose.Schema({
         required: true,
         minlength: 6
     },
+    role: {
+        type: String,
+        enum: ['user', 'admin'],
+        default: 'user'
+    },
     accessCode: {
         type: String,
         default: null // Code do admin cấp để sử dụng tính năng

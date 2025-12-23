@@ -28,3 +28,6 @@ export const authMiddleware = (req, res, next) => {
         return res.status(500).json({ message: 'Auth error', error: error.message });
     }
 };
+
+// Export alias for compatibility
+export const verifyToken = authMiddleware;

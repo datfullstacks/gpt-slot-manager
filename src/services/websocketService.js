@@ -194,6 +194,15 @@ class WebSocketService {
                     account.additionalHeaders || {}
                 );
                 
+                // Reset error tracking on success
+                if (account.sessionStatus !== 'active') {
+                    await Account.findByIdAndUpdate(accountId, {
+                        sessionStatus: 'active',
+                        lastError: null,
+                        errorCount: 0
+                    });
+                }
+                
                 // Prepare members list: include admin as a visible member and calculate counts accordingly
                 const adminEmail = account.email ? account.email.toLowerCase() : '';
                 const allMembers = data.items || [];
@@ -306,8 +315,8 @@ class WebSocketService {
                 };
             } catch (error) {
                 result = {
-                    _id: account._id.toString(),
-                    name: account.name || 'Unnamed Account',
+                    _id: account._id,
+                    name: account.name,
                     email: account.email,
                     accountId: account.accountId,
                     members_count: 0,
@@ -320,6 +329,31 @@ class WebSocketService {
                     nextCheckIn: 30, // Next check in 30 seconds
                     success: false
                 };
+                
+                // Track 401 errors in database
+                if (error.message.includes('401')) {
+                    await Account.findByIdAndUpdate(accountId, {
+                        sessionStatus: 'expired',
+                        lastError: '401 Unauthorized - Session expired',
+                        lastErrorTime: new Date(),
+                        $inc: { errorCount: 1 }
+                    });
+                    console.log(`🔴 Account ${account.email} marked as EXPIRED (401)`);
+                } else if (error.message.includes('422')) {
+                    await Account.findByIdAndUpdate(accountId, {
+                        sessionStatus: 'error',
+                        lastError: '422 Invalid account',
+                        lastErrorTime: new Date(),
+                        $inc: { errorCount: 1 }
+                    });
+                } else {
+                    await Account.findByIdAndUpdate(accountId, {
+                        sessionStatus: 'error',
+                        lastError: error.message,
+                        lastErrorTime: new Date(),
+                        $inc: { errorCount: 1 }
+                    });
+                }
             }
 
             // Send per-account update to WebSocket

@@ -122,6 +122,10 @@ class CurlService {
                         console.error(`❌ 422 Error for account ${finalAccountId}:`, errorText);
                         throw new Error(`HTTP 422: Account ID có thể không đúng hoặc token hết hạn`);
                     }
+                    if (response.status === 401) {
+                        // Unauthorized - session expired
+                        throw new Error(`HTTP 401: Session expired - need re-login`);
+                    }
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 const data = await response.json();
