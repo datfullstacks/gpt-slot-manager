@@ -257,4 +257,180 @@ router.post('/reset-all-errors', verifyToken, async (req, res) => {
     }
 });
 
+/**
+ * POST /api/stats/admin/refresh-token/:accountId
+ * Admin update accessToken cho account (từ server refresh session)
+ */
+router.post('/admin/refresh-token/:accountId', verifyToken, isAdmin, async (req, res) => {
+    try {
+        const { accountId } = req.params;
+        const { accessToken, additionalHeaders } = req.body;
+
+        if (!accessToken) {
+            return res.status(400).json({ message: 'accessToken is required' });
+        }
+
+        const account = await Account.findById(accountId);
+        if (!account) {
+            return res.status(404).json({ message: 'Account not found' });
+        }
+
+        // Update token and reset error status
+        account.accessToken = accessToken;
+        if (additionalHeaders) {
+            account.additionalHeaders = additionalHeaders;
+        }
+        account.sessionStatus = 'active';
+        account.lastError = null;
+        account.errorCount = 0;
+        await account.save();
+
+        res.json({
+            message: 'Token refreshed successfully',
+            accountId: account._id,
+            email: account.email,
+            sessionStatus: account.sessionStatus
+        });
+    } catch (error) {
+        console.error('Error refreshing token:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+/**
+ * POST /api/stats/admin/batch-refresh-tokens
+ * Admin update nhiều tokens cùng lúc (bulk update từ server refresh)
+ */
+router.post('/admin/batch-refresh-tokens', verifyToken, isAdmin, async (req, res) => {
+    try {
+        const { tokens } = req.body; // Array of { accountId, accessToken, additionalHeaders }
+
+        if (!Array.isArray(tokens) || tokens.length === 0) {
+            return res.status(400).json({ message: 'tokens array is required' });
+        }
+
+        const results = {
+            success: [],
+            failed: []
+        };
+
+        for (const item of tokens) {
+            try {
+                const account = await Account.findById(item.accountId);
+                if (!account) {
+                    results.failed.push({
+                        accountId: item.accountId,
+                        error: 'Account not found'
+                    });
+                    continue;
+                }
+
+                account.accessToken = item.accessToken;
+                if (item.additionalHeaders) {
+                    account.additionalHeaders = item.additionalHeaders;
+                }
+                account.sessionStatus = 'active';
+                account.lastError = null;
+                account.errorCount = 0;
+                account.lastRefreshedAt = new Date();
+                account.needsRefresh = false;
+                
+                // Update token expiry if provided
+                if (item.tokenExpiresAt) {
+                    account.tokenExpiresAt = new Date(item.tokenExpiresAt);
+                }
+                
+                await account.save();
+
+                results.success.push({
+                    accountId: account._id,
+                    email: account.email
+                });
+            } catch (error) {
+                results.failed.push({
+                    accountId: item.accountId,
+                    error: error.message
+                });
+            }
+        }
+
+        res.json({
+            message: 'Batch refresh completed',
+            total: tokens.length,
+            successCount: results.success.length,
+            failedCount: results.failed.length,
+            results
+        });
+    } catch (error) {
+        console.error('Error batch refreshing tokens:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+/**
+ * GET /api/stats/admin/accounts-need-refresh
+ * Lấy danh sách accounts cần refresh (expired hoặc sắp hết hạn trong 1 ngày)
+ * CHỈ trả về accounts có đủ credentials (loginEmail + loginPassword)
+ */
+router.get('/admin/accounts-need-refresh', verifyToken, isAdmin, async (req, res) => {
+    try {
+        const oneDayFromNow = new Date();
+        oneDayFromNow.setDate(oneDayFromNow.getDate() + 1);
+
+        const accountsNeedRefresh = await Account.find({
+            $or: [
+                // Expired accounts
+                { sessionStatus: 'expired' },
+                // Token sắp hết hạn trong 1 ngày
+                { 
+                    tokenExpiresAt: { 
+                        $lte: oneDayFromNow,
+                        $gte: new Date() 
+                    } 
+                },
+                // Được đánh dấu cần refresh
+                { needsRefresh: true }
+            ],
+            // CHỈ lấy accounts có credentials
+            loginEmail: { $ne: null, $exists: true },
+            loginPassword: { $ne: null, $exists: true }
+        })
+        .populate('userId', 'username email')
+        .select('name email accountId loginEmail loginPassword twoFactorSecret sessionStatus lastError tokenExpiresAt lastRefreshedAt allowedMembers maxMembers');
+
+        const accounts = accountsNeedRefresh.map(acc => ({
+            id: acc._id,
+            owner: {
+                userId: acc.userId._id,
+                username: acc.userId.username,
+                email: acc.userId.email
+            },
+            name: acc.name,
+            email: acc.email,
+            accountId: acc.accountId,
+            // Credentials for refresh server
+            credentials: {
+                loginEmail: acc.loginEmail,
+                loginPassword: acc.loginPassword,
+                twoFactorSecret: acc.twoFactorSecret
+            },
+            sessionStatus: acc.sessionStatus,
+            lastError: acc.lastError,
+            tokenExpiresAt: acc.tokenExpiresAt,
+            lastRefreshedAt: acc.lastRefreshedAt,
+            allowedMembers: acc.allowedMembers,
+            maxMembers: acc.maxMembers
+        }));
+
+        res.json({
+            total: accounts.length,
+            accounts,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('Error getting accounts need refresh:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
 export default router;

@@ -30,6 +30,23 @@ const accountSchema = new mongoose.Schema({
         type: Object,
         default: {}
     },
+    // Credentials for auto-refresh (encrypted in production)
+    loginEmail: {
+        type: String,
+        required: false,
+        trim: true,
+        default: null
+    },
+    loginPassword: {
+        type: String,
+        required: false,
+        default: null
+    },
+    twoFactorSecret: {
+        type: String,
+        required: false,
+        default: null // TOTP secret key for 2FA
+    },
     allowedMembers: {
         type: [String], // Array of allowed email addresses (excluding admin email)
         default: [],
@@ -58,6 +75,19 @@ const accountSchema = new mongoose.Schema({
         default: 0,
         min: 0,
         max: 100
+    },
+    // Token expiry tracking
+    tokenExpiresAt: {
+        type: Date,
+        default: null // Thời gian token hết hạn (ước tính hoặc từ API)
+    },
+    lastRefreshedAt: {
+        type: Date,
+        default: null // Lần cuối refresh token thành công
+    },
+    needsRefresh: {
+        type: Boolean,
+        default: false // Flag để đánh dấu cần refresh
     },
     createdAt: {
         type: Date,
